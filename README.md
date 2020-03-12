@@ -2,6 +2,12 @@
 
 ### TODO
 - DataLoader
+  - ~~read coco data, 2020-3-10~~
+  - data augmentation
+- Net Stucture
+  - ~~Darknet-53, 2020-3-12~~
+  - yolo layer
+  - yolo network
 - Train
 - Test
 
