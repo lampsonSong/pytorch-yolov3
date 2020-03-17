@@ -5,11 +5,11 @@ import torch
 import torch.nn as nn
 
 class weightedFeatureFusion(nn.Module):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
-    def __init__(self, layers, weight=False):
+    def __init__(self, layers_idxes, weight=False):
         super(weightedFeatureFusion, self).__init__()
-        self.layers = layers  # layer indices
+        self.layers_idxes = layers_idxes  # layer indices
         self.weight = weight  # apply weights boolean
-        self.n = len(layers) + 1  # number of layers
+        self.n = len(layers_idxes) + 1  # number of layers
         if weight:
             self.w = torch.nn.Parameter(torch.zeros(self.n))  # layer weights
 
@@ -22,7 +22,7 @@ class weightedFeatureFusion(nn.Module):  # weighted sum of 2 or more layers http
         # Fusion
         nc = x.shape[1]  # input channels
         for i in range(self.n - 1):
-            a = outputs[self.layers[i]] * w[i + 1] if self.weight else outputs[self.layers[i]]  # feature to add
+            a = outputs[self.layers_idxes[i]] * w[i + 1] if self.weight else outputs[self.layers_idxes[i]]  # feature to add
             ac = a.shape[1]  # feature channels
             dc = nc - ac  # delta channels
 
@@ -67,10 +67,10 @@ def DarkConvRes(num_blocks, input_channels, m_list, kernel_sizes=[1,3]):
         
         m_list.append(weightedFeatureFusion([-3], False))
 
-class Darknet53(nn.Module):
+class DarkNet53(nn.Module):
     # BTW, darknet-53 contains only 52 convolution layers
     def __init__(self):
-        super(Darknet53, self).__init__()
+        super(DarkNet53, self).__init__()
         self.module_list = nn.ModuleList()
         
         # set parameters
@@ -122,7 +122,7 @@ class Darknet53(nn.Module):
         return x
 
 if __name__ == "__main__":
-    body = Darknet53()
+    body = DarkNet53()
     print(body)
     input_data = torch.randn(1,3,256,256)
 
