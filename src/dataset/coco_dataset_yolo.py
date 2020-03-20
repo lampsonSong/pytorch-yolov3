@@ -58,7 +58,7 @@ def letterbox(img, new_shape=(416, 416), color=(128, 128, 128),
 
 
 class COCODatasetYolo(COCODataset):
-    def __init__(self, coco_dir, set_name='val2014', img_size=416):
+    def __init__(self, coco_dir, set_name='val2014', img_size=416, phase='Test'):
         super().__init__(coco_dir, set_name, img_size)
 
         self.max_objects = 100
@@ -68,35 +68,34 @@ class COCODatasetYolo(COCODataset):
         self.multiscale = False
         self.augmentation = False
 
-        if 'val' in set_name:
+        if phase == 'Train':
             self.multiscale = True
             self.augmentation = True
 
             self.aug_seq = iaa.Sequential([
                 iaa.Affine(
-                    scale={"x": (0.95,1.05), "y": (0.95, 1.05)},
-                    rotate=(-45,45),
+                    scale=(0.8, 1.2),
+                    rotate=(-10,10),
                     shear=(-15,15),
-                    translate_percent={"x": (0.95,1.05), "y": (0.95, 1.05)},
-                    )
+                    translate_percent=(-0.05,0.05),
+                    ),
+                iaa.Fliplr(p=0.5),
+                iaa.MultiplyHueAndSaturation((0.5,1.5), per_channel=True)
                 ])
 
     def __getitem__(self, index):
         lettered_img, ratio, pad = self.load_image(index)
         targets, ia_boxes = self.load_box_annotation_yolo(index, ratio, pad)
-
+        #print("-- targets : ", targets)
 
         if self.augmentation:
             lettered_img, aug_ia_boxes = self.aug_seq(image=lettered_img, bounding_boxes=ia_boxes)
 
+            for i,aug_ia_box in enumerate(aug_ia_boxes):
+                #print(i," - aug_ia_box : ", aug_ia_box)
+                targets[i][2], targets[i][3] = torch.tensor(aug_ia_box.x1), torch.tensor(aug_ia_box.y1)
+                targets[i][4], targets[i][5] = torch.tensor(aug_ia_box.x2), torch.tensor(aug_ia_box.y2)
 
-        for i,aug_ia_box in enumerate(aug_ia_boxes[0]):
-            targets[i][2], targets[i][3] = torch.tensor(aug_ia_box.x1), torch.tensor(aug_ia_box.y1)
-            targets[i][4], targets[i][5] = torch.tensor(aug_ia_box.x2), torch.tensor(aug_ia_box.y2)
-
-        print("-- targets : ", targets)
-        print(lettered_img)
-        cv2.imshow("-", lettered_img)
         
         # BGR2RGB
         lettered_img = cv2.cvtColor(lettered_img, cv2.COLOR_BGR2RGB)
@@ -141,9 +140,9 @@ class COCODatasetYolo(COCODataset):
 
         ia_boxes = []
         if self.augmentation:
-            ia_boxes = [[
+            ia_boxes = ia.BoundingBoxesOnImage([
                 ia.BoundingBox(x1=box[2], x2=box[4], y1=box[3], y2=box[5]) for box in boxes
-                ]]
+                ], shape=(self.img_size, self.img_size))
 
         return boxes, ia_boxes
 
@@ -157,7 +156,6 @@ class COCODatasetYolo(COCODataset):
         targets = [boxes for boxes in targets if boxes is not None]
         # add sample index to targets
         for i, boxes in enumerate(targets):
-            #print("-- i : ", i)
             boxes[:, 0] = i
         targets = torch.cat(targets, 0)
     
@@ -178,7 +176,7 @@ if __name__ == "__main__":
     coco_dir = "/home/lampson/2T_disk/Data/COCO_CommonObjectsInContext/COCO_2014"
     dataset = "val2014"
     
-    test_dataset = COCODatasetYolo(coco_dir, dataset, img_size=608)
+    test_dataset = COCODatasetYolo(coco_dir, dataset, img_size=608, phase='Train')
     test_params = {
             "batch_size" : 1,
             "shuffle" : False,
@@ -189,7 +187,7 @@ if __name__ == "__main__":
     test_generator = DataLoader(test_dataset, **test_params)
     
     for i, (imgs, targets) in enumerate(test_generator):
-        print("imgs : ", imgs.shape)
+        #print("imgs : ", imgs.shape)
         #print("targets : ", targets)
         img = imgs[0,:,:,:]
         
