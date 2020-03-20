@@ -15,32 +15,15 @@ import numpy as np
 import random
 import cv2
 
-from dataset.coco_dataset import COCODataset
+import imgaug as ia
+import imgaug.augmenters as iaa
 
-def horisontal_flip(images, targets):
-    images = torch.flip(images, [-1])
-    targets[:, 2] = 1 - targets[:, 2]
-    return images, targets
-
-def pad_to_square(img, pad_value):
-    c, h, w = img.shape
-    dim_diff = np.abs(h - w)  
-    # (upper / left) padding and (lower / right) padding
-    pad1, pad2 = dim_diff // 2, dim_diff - dim_diff // 2
-    # Determine padding
-    pad = (0, 0, pad1, pad2) if h <= w else (pad1, pad2, 0, 0) 
-    # Add padding    
-    img = F.pad(img, pad, "constant", value=pad_value)
-
-    return img, pad  
-
-def resize(image, size):
-    image = F.interpolate(image.unsqueeze(0), size=size, mode="nearest").squeeze(0)
-    return image
+#from dataset.coco_dataset import COCODataset
+from coco_dataset import COCODataset
 
 # from https://github.com/ultralytics/yolov3 utils/dataset.py
 def letterbox(img, new_shape=(416, 416), color=(128, 128, 128),
-              auto=True, scaleFill=False, scaleup=True, interp=cv2.INTER_AREA):
+              auto=True, scaleFill=False, scaleup=True, interp=cv2.INTER_LINEAR):
     # Resize image to a 32-pixel-multiple rectangle https://github.com/ultralytics/yolov3/issues/232
     shape = img.shape[:2]  # current shape [height, width]
     if isinstance(new_shape, int):
@@ -70,74 +53,104 @@ def letterbox(img, new_shape=(416, 416), color=(128, 128, 128),
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
-    return img, ratio, (dw, dh)
-
-
+    
+    return img, ratio, (left, right, top, bottom)
 
 
 class COCODatasetYolo(COCODataset):
     def __init__(self, coco_dir, set_name='val2014', img_size=416):
         super().__init__(coco_dir, set_name, img_size)
-        self.augment=True
-        self.multiscale=True
-        self.normalized_labels=True
 
         self.max_objects = 100
         self.min_size = self.img_size - 3 * 32
         self.max_size = self.img_size + 3 * 32
 
-    def __getitem__(self, index):
-        img, pad, padded_h, padded_w = self.load_image(index)
-        targets = self.load_box_annotation_yolo(index, pad, padded_h, padded_w)
+        self.multiscale = False
+        self.augmentation = False
 
-        return img, targets
+        if 'val' in set_name:
+            self.multiscale = True
+            self.augmentation = True
+
+            self.aug_seq = iaa.Sequential([
+                iaa.Affine(
+                    scale={"x": (0.95,1.05), "y": (0.95, 1.05)},
+                    rotate=(-45,45),
+                    shear=(-15,15),
+                    translate_percent={"x": (0.95,1.05), "y": (0.95, 1.05)},
+                    )
+                ])
+
+    def __getitem__(self, index):
+        lettered_img, ratio, pad = self.load_image(index)
+        targets, ia_boxes = self.load_box_annotation_yolo(index, ratio, pad)
+
+
+        if self.augmentation:
+            lettered_img, aug_ia_boxes = self.aug_seq(image=lettered_img, bounding_boxes=ia_boxes)
+
+
+        for i,aug_ia_box in enumerate(aug_ia_boxes[0]):
+            targets[i][2], targets[i][3] = torch.tensor(aug_ia_box.x1), torch.tensor(aug_ia_box.y1)
+            targets[i][4], targets[i][5] = torch.tensor(aug_ia_box.x2), torch.tensor(aug_ia_box.y2)
+
+        print("-- targets : ", targets)
+        print(lettered_img)
+        cv2.imshow("-", lettered_img)
+        
+        # BGR2RGB
+        lettered_img = cv2.cvtColor(lettered_img, cv2.COLOR_BGR2RGB)
+        lettered_img = torch.from_numpy(lettered_img)
+        # from [w,h,c] to [1,c,w,h]
+        lettered_img = lettered_img.permute(2,0,1)
+
+
+        return lettered_img, targets
 
     def load_image(self, index):
         img_info = self.coco.loadImgs(self.image_ids[index])[0]
         img_path = os.path.join(self.coco_dir, 'images', self.set_name, img_info['file_name'])
        
-        # Extract image as PyTorch tensor
-        img = transforms.ToTensor()(Image.open(img_path).convert('RGB'))
+        img = cv2.imread(img_path)
+        
+        # resize image keeping ratio
+        lettered_img, ratio, pad = letterbox(img, (self.img_size, self.img_size), auto=False)
 
         # Handle images with less than three channels
-        if len(img.shape) != 3:
-            img = img.unsqueeze(0)
-            img = img.expand((3, img.shape[1:]))
+        if len(lettered_img.shape) != 3:
+            lettered_img = lettered_img.unsqueeze(0)
+            lettered_img = lettered_img.expand((3, img.shape[1:]))
 
-        _, h, w = img.shape
-        # the image size original
-        h_factor, w_factor = (h, w) if self.normalized_labels else (1, 1)
-        # Pad to square resolution
-        img, pad = pad_to_square(img, 0)
-        _, padded_h, padded_w = img.shape
-
-        return img, pad, padded_h, padded_w
+        return lettered_img, ratio, pad
 
 
-    def load_box_annotation_yolo(self, index, pad, padded_h, padded_w):
+    def load_box_annotation_yolo(self, index, ratio, pad):
         boxes = self.load_box_annotation(index)
         
         # Extract coordinates for unpadded + unscaled image
         x1 = boxes[:,2]
         y1 = boxes[:,3]
-        x2 = boxes[:,2] + boxes[:,4]
-        y2 = boxes[:,3] + boxes[:,5]
-        # Adjust for added padding
-        x1 += pad[0]
-        y1 += pad[2]
-        x2 += pad[1]
-        y2 += pad[3]
-        # Returns (cx, cy, w, h)
-        boxes[:, 2] = ((x1 + x2) / 2) / padded_w
-        boxes[:, 3] = ((y1 + y2) / 2) / padded_h
-        boxes[:, 4] /= padded_w
-        boxes[:, 5] /= padded_h
+        w = boxes[:,4]
+        h = boxes[:,5]
 
-        return boxes
+        # Returns (x1, y1, x2, y2)
+        boxes[:, 2] = ratio[0] * x1 + pad[0]
+        boxes[:, 3] = ratio[1] * y1 + pad[2]
+        boxes[:, 4] = ratio[0] * w + boxes[:, 2]
+        boxes[:, 5] = ratio[1] * h + boxes[:, 3]
+
+        ia_boxes = []
+        if self.augmentation:
+            ia_boxes = [[
+                ia.BoundingBox(x1=box[2], x2=box[4], y1=box[3], y2=box[5]) for box in boxes
+                ]]
+
+        return boxes, ia_boxes
 
 
     def collate_fn(self, batch):
         imgs, targets = list(zip(*batch))
+        #print("== imgs : ", imgs)
         #print("== targets : ", targets)
         
         # remove empty placeholder targets, from tuple to list
@@ -152,8 +165,8 @@ class COCODatasetYolo(COCODataset):
         if self.multiscale and self.batch_count % 10 == 0:
             self.img_size = random.choice(range(self.min_size, self.max_size + 1, 32))
 
-        # resize images
-        imgs = torch.stack([resize(img, self.img_size) for img in imgs])
+        # stack images
+        imgs = torch.stack([img for img in imgs])
         self.batch_count += 1
         return imgs, targets
 
@@ -165,9 +178,9 @@ if __name__ == "__main__":
     coco_dir = "/home/lampson/2T_disk/Data/COCO_CommonObjectsInContext/COCO_2014"
     dataset = "val2014"
     
-    test_dataset = COCODatasetYolo(coco_dir, dataset)
+    test_dataset = COCODatasetYolo(coco_dir, dataset, img_size=608)
     test_params = {
-            "batch_size" : 4,
+            "batch_size" : 1,
             "shuffle" : False,
             "drop_last" : False,
             "num_workers" : 0,
@@ -175,7 +188,18 @@ if __name__ == "__main__":
             }
     test_generator = DataLoader(test_dataset, **test_params)
     
-    for i, (img, targets) in enumerate(test_generator):
-        #print("img : ", img.shape)
-        print("targets : ", targets)
-        a = 1
+    for i, (imgs, targets) in enumerate(test_generator):
+        print("imgs : ", imgs.shape)
+        #print("targets : ", targets)
+        img = imgs[0,:,:,:]
+        
+        # from tensor to numpy
+        im = img.numpy().transpose(1,2,0)
+        im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+        
+        for _ , target in enumerate(targets):
+            cv2.rectangle(im, (int(target[2]), int(target[3])), (int(target[4]), int(target[5])), (0,255,0))
+
+        cv2.imshow("demo", im)
+        cv2.waitKey(0)
+        
