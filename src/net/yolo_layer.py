@@ -14,12 +14,15 @@ def create_grids(self, img_max_side=416, num_grids=(13, 13), device='cpu', type=
     self.grid_xy = torch.stack((xv, yv), 2).to(device).type(type).view((1, 1, ny, nx, 2))
 
     # build wh gains
-    self.anchor_wh = self.anchors.view(1, self.num_anchors, 1, 1, 2).to(device).type(type)
+    self.anchor_vec = self.anchors.to(device) / self.grid_stride
+    #self.anchor_vec = self.anchors.to(device)
+    self.anchor_wh = self.anchor_vec.view(1, self.num_anchors, 1, 1, 2).to(device).type(type)
     self.num_x = nx
     self.num_y = ny
 
 
 class YOLOLayer(nn.Module):
+    # anchors is the list of anchors , e.g. [[100, 23], [45, 87], [74, 10]]
     def __init__(self, anchors, num_classes):
         super(YOLOLayer, self).__init__()
 
@@ -36,9 +39,9 @@ class YOLOLayer(nn.Module):
         if (self.num_x, self.num_y) != (num_x, num_y):
             create_grids(self, img_max_side, (num_x, num_y), x.device, x.dtype)
 
-        x = x.view(batch_size, self.num_anchors, self.num_outputs, self.num_y, self.num_x).permute(0,1,3,4,2).contiguous() # from [batch_size, 255, y, x] -> [batch_size, 3(anchors), y,x, 85]
+        x = x.view(batch_size, self.num_anchors, self.num_outputs, self.num_y, self.num_x).permute(0,1,3,4,2).contiguous() # from [batch_size, 255, y, x] -> [batch_size, 3(number of anchors), y,x, 85]
 
-        # self.training and self.testing are members of nn.Module
+        # self.training is member of nn.Module
         if self.training:
             return x
         else: # testing
@@ -46,8 +49,8 @@ class YOLOLayer(nn.Module):
 
             # location
             outputs[:, :, :, :, :2] = torch.sigmoid(outputs[:, :, :, :, :2]) + self.grid_xy
-            outputs[:,:,:,:,:2] *= self.grid_stride
             outputs[:, :, :, :, 2:4] = torch.exp(outputs[:,:,:,:,2:4]) * self.anchor_wh
+            outputs[:,:,:,:,:4] *= self.grid_stride
 
             # classificaion
             torch.sigmoid_(outputs[:,:,:,:,4:])

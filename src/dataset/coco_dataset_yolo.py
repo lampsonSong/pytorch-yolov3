@@ -18,8 +18,12 @@ import cv2
 import imgaug as ia
 import imgaug.augmenters as iaa
 
-#from dataset.coco_dataset import COCODataset
-from coco_dataset import COCODataset
+import sys
+sys.path.append('./')
+from dataset.coco_dataset import COCODataset
+from utils.utils import x1y1x2y2_2_cxcywh
+from utils.utils import cxcywh_2_x1y1x2y2
+from utils.utils import scale_coords
 
 # from https://github.com/ultralytics/yolov3 utils/dataset.py
 def letterbox(img, new_shape=(416, 416), color=(128, 128, 128),
@@ -96,6 +100,9 @@ class COCODatasetYolo(COCODataset):
                 targets[i][2], targets[i][3] = torch.tensor(aug_ia_box.x1), torch.tensor(aug_ia_box.y1)
                 targets[i][4], targets[i][5] = torch.tensor(aug_ia_box.x2), torch.tensor(aug_ia_box.y2)
 
+        # label from [x1, y1, x2, y2] to [cx, cy, w, h] and noralization
+        lettered_img_shape = torch.tensor(lettered_img.shape[:2]).repeat(1,2).unsqueeze(0)
+        targets[:,2:6] = x1y1x2y2_2_cxcywh(targets[:,2:6]) / lettered_img_shape
         
         # BGR2RGB
         lettered_img = cv2.cvtColor(lettered_img, cv2.COLOR_BGR2RGB)
@@ -194,8 +201,13 @@ if __name__ == "__main__":
         # from tensor to numpy
         im = img.numpy().transpose(1,2,0)
         im = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
-        
+       
+        # from normalized [cx,cy,w,h] to [x1, y1, x2, y2]
+        im_shape = torch.tensor(im.shape[:2]).repeat(1,2).unsqueeze(0)
+        targets[:,2:6] = cxcywh_2_x1y1x2y2(targets[:,2:6]) * im_shape
+
         for _ , target in enumerate(targets):
+            print(targets)
             cv2.rectangle(im, (int(target[2]), int(target[3])), (int(target[4]), int(target[5])), (0,255,0))
 
         cv2.imshow("demo", im)
