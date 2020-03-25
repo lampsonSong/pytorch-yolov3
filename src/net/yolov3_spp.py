@@ -1,6 +1,8 @@
 # created by lampson.song @ 2020-3-13
 # yolov3-spp network
 
+import sys
+sys.path.append('.')
 from net.darknet import DarkNet53
 from net.darknet import ConvBnLeakyRelu
 from net.darknet import weightedFeatureFusion

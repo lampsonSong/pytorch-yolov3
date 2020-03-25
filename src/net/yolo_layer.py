@@ -17,8 +17,8 @@ def create_grids(self, img_max_side=416, num_grids=(13, 13), device='cpu', type=
     self.anchor_vec = self.anchors.to(device) / self.grid_stride
     #self.anchor_vec = self.anchors.to(device)
     self.anchor_wh = self.anchor_vec.view(1, self.num_anchors, 1, 1, 2).to(device).type(type)
-    self.num_x = nx
-    self.num_y = ny
+    self.grid_num_x = nx
+    self.grid_num_y = ny
 
 
 class YOLOLayer(nn.Module):
@@ -29,17 +29,17 @@ class YOLOLayer(nn.Module):
         self.anchors = anchors
         self.num_classes = num_classes
         self.num_anchors = len(anchors)
-        self.num_x = 0
-        self.num_y = 0
+        self.grid_num_x = 0
+        self.grid_num_y = 0
         self.num_outputs = self.num_classes + 5 # classes + len([x,y,w,h,objecteness])
 
     def forward(self, x, img_max_side):
-        batch_size, _, num_y, num_x = x.shape # last layer output shape : [batch_size, 255, w, h]
+        batch_size, _, grid_num_y, grid_num_x = x.shape # last layer output shape : [batch_size, 255, w, h]
         
-        if (self.num_x, self.num_y) != (num_x, num_y):
-            create_grids(self, img_max_side, (num_x, num_y), x.device, x.dtype)
+        if (self.grid_num_x, self.grid_num_y) != (grid_num_x, grid_num_y):
+            create_grids(self, img_max_side, (grid_num_x, grid_num_y), x.device, x.dtype)
 
-        x = x.view(batch_size, self.num_anchors, self.num_outputs, self.num_y, self.num_x).permute(0,1,3,4,2).contiguous() # from [batch_size, 255, y, x] -> [batch_size, 3(number of anchors), y,x, 85]
+        x = x.view(batch_size, self.num_anchors, self.num_outputs, self.grid_num_y, self.grid_num_x).permute(0,1,3,4,2).contiguous() # from [batch_size, 255, y, x] -> [batch_size, 3(number of anchors), y,x, 85]
 
         # self.training is member of nn.Module
         if self.training:

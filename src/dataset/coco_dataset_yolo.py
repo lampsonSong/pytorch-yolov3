@@ -207,7 +207,6 @@ if __name__ == "__main__":
         targets[:,2:6] = cxcywh_2_x1y1x2y2(targets[:,2:6]) * im_shape
 
         for _ , target in enumerate(targets):
-            print(targets)
             cv2.rectangle(im, (int(target[2]), int(target[3])), (int(target[4]), int(target[5])), (0,255,0))
 
         cv2.imshow("demo", im)
