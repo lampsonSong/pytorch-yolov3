@@ -21,29 +21,61 @@ def get_yolo_loss(model, predictions, targets, regression_loss_type='GIoU'):
     b_multi_gpu = type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
 
     yolo_layer_idx = 0
-    reg_loss, cls_loss = data_type([0]), data_type([0])
-    for idx, module in enumerate(model):
+    reg_loss, obj_loss, cls_loss = data_type([0]), data_type([0]), data_type([0])
+    for idx, module in enumerate(model.module_list):
         if isinstance(module, YOLOLayer):
             yolo_out = predictions[yolo_layer_idx]
             yolo_layer_idx += 1
 
-            feature_targets = convert_targets_to_feature_level(module, targets)
+            feature_targets = convert_targets_to_feature_level(module, targets, train_iou_thresh=0.225)
 
-            print(" - reg_loss")
-            reg_loss += regression_loss(yolo_out, feature_targets, regression_loss_type)
-            print(" - done")
+            # box regression loss
+            reg_iou_loss, reg_iou = regression_loss(yolo_out, feature_targets, regression_loss_type)
+            reg_loss += reg_iou_loss
 
+            # objectness loss
+            obj_loss += objectness_loss(yolo_out, feature_targets, reg_iou, model.iou_ratio, obj_loss_type='BCE')
 
-            #cls_loss = classification_loss()
+            # cls loss
+            cls_loss += classification_loss(yolo_out, feature_targets, cls_loss_type='BCE')
+
 
     # gain are from https://github.com/ultralytics/yolov3/issues/310 
-    reg_loss *= 3.54 # giou loss weights 
+    reg_loss *= 3.54 # giou loss gain
+    obj_loss *= 64.3 # obj loss gain
     cls_loss *= 37.4 # cls loss gain
 
+    loss = reg_loss + obj_loss + cls_loss
+    return loss, torch.cat((reg_loss, obj_loss, cls_loss, loss)).detach()
 
-# cls loss of classes
-def cls_loss(yolo_out, feature_targets, cls_loss_type='BCE'):
-    p_obj = yolo_out[:, 5]
+
+# loss of objectness for each grid
+def objectness_loss(yolo_out, feature_targets, reg_iou, iou_ratio, obj_loss_type='BCE'):
+    if obj_loss_type == 'BCE':
+        obj_func = torch.nn.BCEWithLogitsLoss(reduction='mean')
+
+    labels_obj = torch.zeros_like(yolo_out[..., 0])
+    img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
+
+    labels_obj[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y] = (1.0 - iou_ratio) + iou_ratio * reg_iou.detach().clamp(0).type(labels_obj.dtype)
+
+    return obj_func(yolo_out[...,4], labels_obj)
+
+# loss of classes
+def classification_loss(yolo_out, feature_targets, cls_loss_type='BCE'):
+    if cls_loss_type == 'BCE':
+        cls_func = torch.nn.BCEWithLogitsLoss(reduction='mean')
+
+    img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
+    # select_out shape is [num_real_targets, 85]
+    select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y]
+    
+    labels_cls = torch.zeros_like(select_out[:,5:])
+
+    tcls = feature_targets['tcls']
+    labels_cls[range(len(tcls)), tcls] = 1.
+
+    return cls_func(select_out[:,5:], labels_cls)
 
 # regression loss of boxes
 def regression_loss(yolo_out, feature_targets, regression_loss_type, red='mean'):
@@ -62,10 +94,10 @@ def regression_loss(yolo_out, feature_targets, regression_loss_type, red='mean')
     tboxes = feature_targets['tboxes']
 
     if regression_loss_type == 'GIoU':
-        giou = box_giou(select_boxes, tboxes, box_type='cxcywh')
-        reg_loss = (1. - giou).sum() if red == 'sum' else (1. - giou).mean()
+        reg_iou = box_giou(select_boxes, tboxes, box_type='cxcywh')
+        reg_iou_loss = (1. - reg_iou).sum() if red == 'sum' else (1. - reg_iou).mean()
 
-    return reg_loss
+    return reg_iou_loss, reg_iou
 
 # convert labels from normalized format to feature level corresponding to anchors
 def convert_targets_to_feature_level(yolo_layer, targets, train_iou_thresh=0.):
@@ -136,4 +168,4 @@ if __name__ == '__main__':
         [1,17,0.2,0.53,0.1,0.42]
         ])
 
-    get_yolo_loss(yolov3_spp.module_list, outputs, targets)
+    get_yolo_loss(yolov3_spp, outputs, targets)
