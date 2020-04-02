@@ -38,6 +38,7 @@ class COCODataset(Dataset):
             self.coco_labels_inverse[c['id']] = len(self.classes)
             self.classes[c['name']] = len(self.classes)
     
+        self.num_classes = len(self.classes)
         # also load the reverse (label -> name)
         self.labels = {}
         for key, value in self.classes.items():
@@ -69,7 +70,7 @@ class COCODataset(Dataset):
  
         # some images appear to miss annotations
         if len(annotations_ids) == 0:
-            return torch.tensor(annotations)
+            return torch.FloatTensor(annotations)
  
         # parse annotations
         coco_annotations = self.coco.loadAnns(annotations_ids)
@@ -85,7 +86,7 @@ class COCODataset(Dataset):
 
         #print("-- annotations.shape : ", annotations.shape)
         # return (type, lx,ly,w,h) , shape is [box_num, 5]
-        return torch.tensor(annotations)
+        return torch.FloatTensor(annotations)
 
     def collate_fn(self, batch):
         imgs, targets = list(zip(*batch))

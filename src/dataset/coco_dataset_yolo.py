@@ -62,18 +62,18 @@ def letterbox(img, new_shape=(416, 416), color=(128, 128, 128),
 
 
 class COCODatasetYolo(COCODataset):
-    def __init__(self, coco_dir, set_name='val2014', img_size=416, phase='Test'):
+    def __init__(self, coco_dir, set_name='val2014', img_size=416, multiscale=False, phase='Test'):
         super().__init__(coco_dir, set_name, img_size)
 
         self.max_objects = 100
         self.min_size = self.img_size - 3 * 32
         self.max_size = self.img_size + 3 * 32
 
-        self.multiscale = False
+        self.multiscale = multiscale
+        self.batch_count = 0
         self.augmentation = False
 
         if phase == 'Train':
-            self.multiscale = True
             self.augmentation = True
 
             self.aug_seq = iaa.Sequential([
