@@ -103,6 +103,12 @@ class COCODatasetYolo(COCODataset):
         # label from [x1, y1, x2, y2] to [cx, cy, w, h] and noralization
         lettered_img_shape = torch.tensor(lettered_img.shape[:2]).repeat(1,2).unsqueeze(0)
         targets[:,2:6] = x1y1x2y2_2_cxcywh(targets[:,2:6]) / lettered_img_shape
+
+        # filter the (cx, cy) out of index
+        t_in = (targets[:,2] > 0.) * (targets[:,2] < 1.) * (targets[:,3] > 0.) * (targets[:,3] < 1.)
+
+        targets = targets[t_in, :]
+
         
         # BGR2RGB
         lettered_img = cv2.cvtColor(lettered_img, cv2.COLOR_BGR2RGB)
