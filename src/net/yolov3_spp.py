@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from net.yolo_layer import YOLOLayer
 
-anchors = torch.tensor([[10,13], [16,30], [33,23], [30,61], [62,45], [59,119], [116,90], [156,198], [373,326]])
+anchors = torch.FloatTensor([[10.,13], [16,30], [33,23], [30,61], [62,45], [59,119], [116,90], [156,198], [373,326]])
 
 def Conv(input_channels, output_channels, kernel_size =3, stride=1, groups=1, bias=False):
     padding = (kernel_size - 1) // 2
@@ -38,6 +38,7 @@ class YOLOv3_SPP(nn.Module):
     def __init__(self, num_classes):
         super(YOLOv3_SPP, self).__init__()
         self.num_classes = num_classes
+        self.iou_ratio = 1.
 
         # first half of yolov3-spp : darknet
         darknet53 = DarkNet53()
@@ -157,7 +158,30 @@ class YOLOv3_SPP(nn.Module):
                     num_classes=self.num_classes)
             )
 
+        self._initialize_weights()
 
+    def _initialize_weights(self):
+        for m in self.module_list:
+            if isinstance(m, nn.Sequential):
+                for s in m:
+                    if isinstance(s, nn.Conv2d):
+                        nn.init.kaiming_normal_(s.weight, mode='fan_out')
+                        if s.bias is not None:
+                            nn.init.zeros_(s.bias)
+                    elif isinstance(s, nn.BatchNorm2d):
+                        nn.init.ones_(s.weight)
+                        nn.init.zeros_(s.bias)
+            elif isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def forward(self, x):
         outputs = []
@@ -165,6 +189,8 @@ class YOLOv3_SPP(nn.Module):
         img_max_side = max(x.shape[-2:])
 
         for idx, module in enumerate(self.module_list):
+            #if idx == 0:
+            #    print(" index 0, grads : ", module[0].weight.grad)
             if isinstance(module, weightedFeatureFusion):
                 x = module(x, outputs)
                 outputs.append(x)
