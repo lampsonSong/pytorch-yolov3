@@ -9,6 +9,7 @@ from net.darknet import weightedFeatureFusion
 import torch
 import torch.nn as nn
 from net.yolo_layer import YOLOLayer
+import math
 
 anchors = torch.FloatTensor([[10.,13], [16,30], [33,23], [30,61], [62,45], [59,119], [116,90], [156,198], [373,326]])
 
@@ -182,6 +183,20 @@ class YOLOv3_SPP(nn.Module):
                 nn.init.normal_(m.weight, 0, 0.01)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
+            elif isinstance(m, YOLOLayer):
+                # Initialize preceding Conv2d() bias (https://arxiv.org/pdf/1708.02002.pdf section 3.3)
+                p = math.log(1 / (m.num_classes - 0.99))
+
+                ## arc is default
+                b = [-4.5, p] # obj, cls
+
+                bias = self.module_list[-2][0].bias.view(m.num_anchors, -1)
+                bias[:, 4] += b[0] - bias[:, 4].mean() # obj
+                bias[:, 5] += b[1] - bias[:, 5:].mean() # cls
+
+                self.module_list[-2][0].bias = torch.nn.Parameter(bias.view(-1))
+
+
 
     def forward(self, x):
         outputs = []
