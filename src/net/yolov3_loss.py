@@ -39,7 +39,10 @@ class FocalLoss(nn.Module):
 def get_yolo_loss(model, yolo_outs, targets, regression_loss_type='GIoU'):
     device = yolo_outs[0].device
     zero_tensor = torch.zeros(1).to(device) 
-    loss, reg_loss, obj_loss, cls_loss = zero_tensor, zero_tensor, zero_tensor, zero_tensor
+    loss = torch.zeros(1).to(device)
+    reg_loss = torch.zeros(1).to(device)
+    obj_loss = torch.zeros(1).to(device)
+    cls_loss = torch.zeros(1).to(device)
 
     b_multi_gpu = type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel, apex.parallel.DistributedDataParallel)
 
@@ -59,7 +62,8 @@ def get_yolo_loss(model, yolo_outs, targets, regression_loss_type='GIoU'):
            
             reg_iou = None
             if len(feature_targets['tboxes']) == 0:
-                loss += 0 * torch.sum(yolo_out) # fix the find_unused_parameters bug for torch.nn.parallel, https://github.com/NVIDIA/apex/issues/208
+                reg_loss += 0 * torch.sum(yolo_out)
+                cls_loss += 0 * torch.sum(yolo_out) # fix the find_unused_parameters bug for torch.nn.parallel, https://github.com/NVIDIA/apex/issues/208
                 continue
             else:
                 # box regression loss
@@ -70,8 +74,8 @@ def get_yolo_loss(model, yolo_outs, targets, regression_loss_type='GIoU'):
                 # cls loss
                 cls_loss += classification_loss(yolo_out, feature_targets, fl_gamma, cls_loss_type='BCE')
 
-                # objectness loss
-                obj_loss += objectness_loss(yolo_out, feature_targets, reg_iou, model.iou_ratio, fl_gamma, obj_loss_type='BCE')
+            # objectness loss
+            obj_loss += objectness_loss(yolo_out, feature_targets, reg_iou, model.iou_ratio, fl_gamma, obj_loss_type='BCE')
 
     # gain are from https://github.com/ultralytics/yolov3/issues/310 
     reg_loss *= model.hyp['reg_loss_gain'] # giou loss gain
@@ -81,6 +85,27 @@ def get_yolo_loss(model, yolo_outs, targets, regression_loss_type='GIoU'):
     loss = reg_loss + obj_loss + cls_loss
     return loss, torch.cat((reg_loss, obj_loss, cls_loss, loss)).detach()
 
+# regression loss of boxes
+def regression_loss(yolo_out, feature_targets, regression_loss_type, red='mean'):
+    # print(" - feature_targets indices : ", feature_targets['indices'])
+    img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
+    # select_out shape is [num_real_targets, 85]
+    select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y]
+
+    select_boxes_xy = torch.sigmoid(select_out[:,:2]) + torch.cat( (targets_cell_x.unsqueeze(1),targets_cell_y.unsqueeze(1)), 1) # sig(tx) + cx & sig(ty) + cy
+    select_boxes_wh = torch.exp(select_out[:,2:4]).clamp(max=1E3) * feature_targets['used_anchor_vec']
+    select_boxes = torch.cat((select_boxes_xy, select_boxes_wh), 1)
+
+    tboxes = feature_targets['tboxes']
+
+    if regression_loss_type == 'GIoU':
+        if select_boxes.shape[0] > 0:
+            reg_iou = box_giou(select_boxes, tboxes, box_type='cxcywh')
+        else:
+            reg_iou = torch.zeros_like(tboxes)
+        reg_iou_loss = (1. - reg_iou).sum() if red == 'sum' else (1. - reg_iou).mean()
+
+    return reg_iou_loss, reg_iou.detach()
 
 # loss of objectness for each grid
 def objectness_loss(yolo_out, feature_targets, reg_iou, iou_ratio, fl_gamma, obj_loss_type='BCE'):
@@ -90,7 +115,7 @@ def objectness_loss(yolo_out, feature_targets, reg_iou, iou_ratio, fl_gamma, obj
     obj_func = FocalLoss(obj_func, fl_gamma)
 
     labels_obj = torch.zeros_like(yolo_out[..., 0])
-    
+   
     if reg_iou is not None: # reg_iou is not None
         img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
 
@@ -115,28 +140,6 @@ def classification_loss(yolo_out, feature_targets, fl_gamma, cls_loss_type='BCE'
     labels_cls[range(len(tcls)), tcls] = 1.
 
     return cls_func(select_out[:,5:], labels_cls)
-
-# regression loss of boxes
-def regression_loss(yolo_out, feature_targets, regression_loss_type, red='mean'):
-    
-    img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
-    # select_out shape is [num_real_targets, 85]
-    select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y]
-
-    select_boxes_xy = torch.sigmoid(select_out[:,:2]) + torch.cat( (targets_cell_x.unsqueeze(1),targets_cell_y.unsqueeze(1)), 1) # sig(tx) + cx & sig(ty) + cy
-    select_boxes_wh = torch.exp(select_out[:,2:4]).clamp(max=1E3) * feature_targets['used_anchor_vec']
-    select_boxes = torch.cat((select_boxes_xy, select_boxes_wh), 1)
-
-    tboxes = feature_targets['tboxes']
-
-    if regression_loss_type == 'GIoU':
-        if select_boxes.shape[0] > 0:
-            reg_iou = box_giou(select_boxes, tboxes, box_type='cxcywh')
-        else:
-            reg_iou = torch.zeros_like(tboxes)
-        reg_iou_loss = (1. - reg_iou).sum() if red == 'sum' else (1. - reg_iou).mean()
-
-    return reg_iou_loss, reg_iou.detach()
 
 # convert labels from normalized format to feature level corresponding to anchors
 def convert_targets_to_feature_level(yolo_layer, targets, train_iou_thresh=0.):
