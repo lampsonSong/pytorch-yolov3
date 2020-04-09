@@ -199,17 +199,17 @@ def box_giou(boxes1, boxes2, box_type='cxcywh'):
     if box_type == 'cxcywh':
         boxes1 = cxcywh_2_x1y1x2y2(boxes1)
         boxes2 = cxcywh_2_x1y1x2y2(boxes2)
-
+    
     inter_area = torch.min(boxes1[:,2:4], boxes2[:,2:4]) - torch.max(boxes1[:,:2], boxes2[:,:2])
     inter_area = inter_area.clamp(0).prod(1)
 
-    boxes1_area = boxes1.prod(1)
-    boxes2_area = boxes2.prod(1)
+    boxes1_area = (boxes1[:,2:4].clamp(0) - boxes1[:,:2].clamp(0)).prod(1)
+    boxes2_area = (boxes2[:,2:4].clamp(0) - boxes2[:,:2].clamp(0)).prod(1)
 
     iou = inter_area / (boxes1_area + boxes2_area - inter_area)
 
     convex_area = torch.max(boxes1[:,2:4], boxes2[:,2:4]) - torch.min(boxes1[:,:2], boxes2[:,:2])
     convex_area = convex_area.clamp(0).prod(1)
 
-    return iou - (convex_area - inter_area) / convex_area
+    return iou - abs(convex_area - inter_area) / abs(convex_area)
 
