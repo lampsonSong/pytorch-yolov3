@@ -88,9 +88,8 @@ class COCODatasetYolo(COCODataset):
                 ])
 
     def __getitem__(self, index):
-        lettered_img, ratio, pad = self.load_image(index)
+        lettered_img, ratio, pad, orig_shape = self.load_image(index)
         targets, ia_boxes = self.load_box_annotation_yolo(index, ratio, pad)
-        #print("-- targets : ", targets)
 
         if self.augmentation:
             lettered_img, aug_ia_boxes = self.aug_seq(image=lettered_img, bounding_boxes=ia_boxes)
@@ -106,18 +105,16 @@ class COCODatasetYolo(COCODataset):
 
         # filter the (cx, cy) out of index
         t_in = (targets[:,2] > 0.) * (targets[:,2] < 1.) * (targets[:,3] > 0.) * (targets[:,3] < 1.)
-
         targets = targets[t_in, :]
 
-        
         # BGR2RGB
         lettered_img = cv2.cvtColor(lettered_img, cv2.COLOR_BGR2RGB)
         lettered_img = torch.from_numpy(lettered_img)
         # from [w,h,c] to [1,c,w,h]
         lettered_img = lettered_img.permute(2,0,1)
 
-
-        return lettered_img, targets
+        # orig_shape for coco mAP
+        return lettered_img, targets, orig_shape
 
     def load_image(self, index):
         img_info = self.coco.loadImgs(self.image_ids[index])[0]
@@ -133,7 +130,9 @@ class COCODatasetYolo(COCODataset):
             lettered_img = lettered_img.unsqueeze(0)
             lettered_img = lettered_img.expand((3, img.shape[1:]))
 
-        return lettered_img, ratio, pad
+        orig_shape = img.shape
+
+        return lettered_img, ratio, pad, orig_shape
 
 
     def load_box_annotation_yolo(self, index, ratio, pad):
@@ -161,9 +160,7 @@ class COCODatasetYolo(COCODataset):
 
 
     def collate_fn(self, batch):
-        imgs, targets = list(zip(*batch))
-        #print("== imgs : ", imgs)
-        #print("== targets : ", targets)
+        imgs, targets, orig_shapes_tuple = list(zip(*batch))
         
         # remove empty placeholder targets, from tuple to list
         targets = [boxes for boxes in targets if boxes is not None]
@@ -178,8 +175,9 @@ class COCODatasetYolo(COCODataset):
 
         # stack images
         imgs = torch.stack([img for img in imgs])
+
         self.batch_count += 1
-        return imgs, targets
+        return imgs, targets, orig_shapes_tuple
 
 
 
