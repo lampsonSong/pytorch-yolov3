@@ -155,8 +155,8 @@ def train_yolo(gpu, args):
         if args.world_size > 1:
             model.module.load_state_dict(checkpoint['state_dict'])
         else:
-            #model.load_state_dict(checkpoint['state_dict'])
-            model.load_state_dict(checkpoint['model'])
+            model.load_state_dict(checkpoint['state_dict'])
+            #model.load_state_dict(checkpoint['model'])
 
         start_epoch = checkpoint['epoch']
 
