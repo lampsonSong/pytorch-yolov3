@@ -88,7 +88,7 @@ class COCODatasetYolo(COCODataset):
                 ])
 
     def __getitem__(self, index):
-        lettered_img, ratio, pad, orig_shape = self.load_image(index)
+        lettered_img, ratio, pad, orig_img = self.load_image(index)
         targets, ia_boxes = self.load_box_annotation_yolo(index, ratio, pad)
 
         if self.augmentation:
@@ -113,8 +113,9 @@ class COCODatasetYolo(COCODataset):
         # from [w,h,c] to [1,c,w,h]
         lettered_img = lettered_img.permute(2,0,1)
 
-        # orig_shape for coco mAP
-        return lettered_img, targets, orig_shape
+        # orig_img and img_id for coco mAP
+        img_id = (self.image_ids[index])
+        return lettered_img, targets, orig_img, img_id
 
     def load_image(self, index):
         img_info = self.coco.loadImgs(self.image_ids[index])[0]
@@ -130,9 +131,7 @@ class COCODatasetYolo(COCODataset):
             lettered_img = lettered_img.unsqueeze(0)
             lettered_img = lettered_img.expand((3, img.shape[1:]))
 
-        orig_shape = img.shape
-
-        return lettered_img, ratio, pad, orig_shape
+        return lettered_img, ratio, pad, img
 
 
     def load_box_annotation_yolo(self, index, ratio, pad):
@@ -160,7 +159,7 @@ class COCODatasetYolo(COCODataset):
 
 
     def collate_fn(self, batch):
-        imgs, targets, orig_shapes_tuple = list(zip(*batch))
+        imgs, targets, orig_imgs_tuple, img_id_tuple = list(zip(*batch))
         
         # remove empty placeholder targets, from tuple to list
         targets = [boxes for boxes in targets if boxes is not None]
@@ -177,7 +176,7 @@ class COCODatasetYolo(COCODataset):
         imgs = torch.stack([img for img in imgs])
 
         self.batch_count += 1
-        return imgs, targets, orig_shapes_tuple
+        return imgs, targets, orig_imgs_tuple, img_id_tuple
 
 
 
@@ -189,7 +188,7 @@ if __name__ == "__main__":
     
     test_dataset = COCODatasetYolo(coco_dir, dataset, img_size=608, phase='Train')
     test_params = {
-            "batch_size" : 1,
+            "batch_size" : 2,
             "shuffle" : False,
             "drop_last" : False,
             "num_workers" : 0,
@@ -197,10 +196,11 @@ if __name__ == "__main__":
             }
     test_generator = DataLoader(test_dataset, **test_params)
     
-    for i, (imgs, targets) in enumerate(test_generator):
+    for i, (imgs, targets, _, _) in enumerate(test_generator):
         #print("imgs : ", imgs.shape)
         #print("targets : ", targets)
-        img = imgs[0,:,:,:]
+        img_idx = 0
+        img = imgs[img_idx,:,:,:]
         
         # from tensor to numpy
         im = img.numpy().transpose(1,2,0)
@@ -209,6 +209,7 @@ if __name__ == "__main__":
         # from normalized [cx,cy,w,h] to [x1, y1, x2, y2]
         im_shape = torch.tensor(im.shape[:2]).repeat(1,2).unsqueeze(0)
         targets[:,2:6] = cxcywh_2_x1y1x2y2(targets[:,2:6]) * im_shape
+        targets = targets[targets[:,0]==img_idx]
 
         for _ , target in enumerate(targets):
             cv2.rectangle(im, (int(target[2]), int(target[3])), (int(target[4]), int(target[5])), (0,255,0))
