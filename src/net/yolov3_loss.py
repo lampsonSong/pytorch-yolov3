@@ -92,7 +92,7 @@ def regression_loss(yolo_out, feature_targets, regression_loss_type, red='mean')
     # select_out shape is [num_real_targets, 85]
     select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y]
 
-    select_boxes_xy = torch.sigmoid(select_out[:,:2]) + torch.cat( (targets_cell_x.unsqueeze(1),targets_cell_y.unsqueeze(1)), 1) # sig(tx) + cx & sig(ty) + cy
+    select_boxes_xy = torch.sigmoid(select_out[:,:2]) # sig(tx) + cx & sig(ty) + cy
     select_boxes_wh = torch.exp(select_out[:,2:4]).clamp(max=1E3) * feature_targets['used_anchor_vec']
     select_boxes = torch.cat((select_boxes_xy, select_boxes_wh), 1)
 
@@ -186,6 +186,7 @@ def convert_targets_to_feature_level(yolo_layer, targets, train_iou_thresh=0.):
 
     # combine indices, convet data type to 64bit long int
     img_ids, cls, targets_cell_x, targets_cell_y = real_targets[:,:4].t().long()
+    real_targets[:,:2] = real_targets[:,:2] - torch.cat( (targets_cell_x.unsqueeze(1),targets_cell_y.unsqueeze(1)), 1)
 
     feature_targets['tboxes'] = real_targets[:, 2:6]
     feature_targets['indices'] = (img_ids, used_anchor_idx, targets_cell_x, targets_cell_y)
