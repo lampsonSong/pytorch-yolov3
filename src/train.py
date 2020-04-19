@@ -27,7 +27,7 @@ from coco_eval import convert_out_format, save_json, get_coco_eval, coco80_to_co
 
 hyp = {
     'weight_decay' : 0.00484,
-    'reg_loss_gain' : 0.54,
+    'reg_loss_gain' : 0.1,
     'obj_loss_gain' : 64.3,
     'cls_loss_gain' : 37.4,
     'train_iou_thresh' : 0.225,
@@ -59,7 +59,7 @@ def get_dataloader(args, local_rank):
                 collate_fn = train_dataset.collate_fn
                 )
 
-        # test dataloader
+    # test dataloader
     test_dataset = COCODatasetYolo(
             coco_dir=args.coco_dir, 
             set_name='val2017', 
@@ -68,18 +68,13 @@ def get_dataloader(args, local_rank):
             )
     # number of classes from dataset
     args.num_classes = test_dataset.num_classes
-    test_sampler = DistributedSampler(
-            test_dataset,
-            num_replicas = args.world_size,
-            rank = local_rank
-            )
+    
     test_loader = DataLoader(
             dataset = test_dataset, 
             batch_size = 1,
             num_workers = args.num_workers,
             shuffle = False,
             pin_memory = True,
-            #sampler = test_sampler, # only one device is used to test
             collate_fn = test_dataset.collate_fn
             )
 
@@ -147,7 +142,7 @@ def train_yolo(gpu, args):
                     device_ids=[gpu],
                     find_unused_parameters=True)
 
-            start_epoch = 0
+    start_epoch = 0
 
     # resume TODO
     if args.resume and os.path.exists(args.resume):
@@ -169,7 +164,7 @@ def train_yolo(gpu, args):
 
     results = (0,0,0,0,0,0,0)
     model.hyp = hyp
-    best_mAP = 0.
+    best_mAP = -1.
     # start training
     for epoch in range(start_epoch, args.epoches):
         if not args.test_only:
@@ -215,8 +210,8 @@ def train_yolo(gpu, args):
                 # mean loss
                 mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
                 mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]))
-                s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
+                s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]))
+                #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
 
                 pbar.set_description(s)
 
@@ -231,19 +226,7 @@ def train_yolo(gpu, args):
         # test coco
         test_device = next(model.parameters()).device
         if str(test_device) == "cuda:0":
-            test_model = YOLOv3_SPP(num_classes = args.num_classes)
-            test_model.to(test_device)
-            
-            if args.test_only:
-                checkpoint = torch.load(args.resume, map_location=test_device)
-                test_model.load_state_dict(checkpoint['state_dict'])
-            else:
-                if args.world_size > 1:
-                    test_model.load_state_dict(model.module.state_dict())
-                else:
-                    test_model.load_state_dict(model.state_dict())
-            
-            test_model.eval()
+            model.eval()
             test_input_shape = (416, 416)
             results = []
             processed_ids = []
@@ -253,18 +236,19 @@ def train_yolo(gpu, args):
                 if(len(targets) == 0):
                     continue
 
-                imgs = imgs.cuda(gpu, non_blocking=True).float() / 255.
-                targets = targets.cuda(gpu, non_blocking=True)
+                imgs = imgs.to(test_device).float() / 255.
+                targets = targets.to(test_device)
 
                 # run model
                 with torch.no_grad():
                     thres_out = 0.05
-                    yolo_outs = test_model(imgs)
+                    yolo_outs = model(imgs)
                     outputs = non_max_suppression(yolo_outs, conf_thres=thres_out)
                     for i, det in enumerate(outputs):
-                        if det == None:
+                        if not isinstance(det, torch.Tensor):
                             print("det is none")
                             continue
+
 
                         orig_img = orig_imgs_tuple[i]
                         det[:, :4] = scale_coords(test_input_shape, det[:, :4], orig_img.shape).round()
@@ -294,7 +278,7 @@ def train_yolo(gpu, args):
                 continue
             else:
                 # save model
-                if local_rank == 0 and not test_status[0] > best_mAP:
+                if local_rank == 0 and test_status[0] > best_mAP:
                     best_mAP = test_status[0]
                     if args.world_size > 1:
                         state_dict = model.module.state_dict()
@@ -308,7 +292,6 @@ def train_yolo(gpu, args):
                             #'scheduler' : scheduler.state_dict()
                             }
                     torch.save(state, "../weights/yolov3_epoch{}.pth".format(epoch))
-
 
 
 if __name__ == "__main__":
