@@ -15,7 +15,7 @@ import numpy as np
 import apex
 
 class FocalLoss(nn.Module):
-    # Wraps focal loss around existing loss_fcn() https://arxiv.org/pdf/1708.02002.pdf                                                                                                                 
+    # Wraps focal loss around existing loss_fcn() https://arxiv.org/pdf/1708.02002.pdf
     # i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=2.5)
     def __init__(self, loss_fcn, gamma=0.5, alpha=0.25):
         super(FocalLoss, self).__init__()
