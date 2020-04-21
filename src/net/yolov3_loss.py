@@ -37,6 +37,7 @@ class FocalLoss(nn.Module):
             return loss
 
 def get_yolo_loss(model, yolo_outs, targets, regression_loss_type='GIoU'):
+    #print("\n\n ---------------------------------------------------------- \n\n")
     device = yolo_outs[0].device
     zero_tensor = torch.zeros(1).to(device) 
     loss = torch.zeros(1).to(device)
@@ -90,7 +91,9 @@ def regression_loss(yolo_out, feature_targets, regression_loss_type, red='mean')
     # print(" - feature_targets indices : ", feature_targets['indices'])
     img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
     # select_out shape is [num_real_targets, 85]
+    #print(" - yolo_out : ", yolo_out)
     select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y]
+    #print(" - select_out : ", select_out)
 
     select_boxes_xy = torch.sigmoid(select_out[:,:2]) # sig(tx) + cx & sig(ty) + cy
     select_boxes_wh = torch.exp(select_out[:,2:4]).clamp(max=1E3) * feature_targets['used_anchor_vec']
@@ -186,7 +189,7 @@ def convert_targets_to_feature_level(yolo_layer, targets, train_iou_thresh=0.):
 
     # combine indices, convet data type to 64bit long int
     img_ids, cls, targets_cell_x, targets_cell_y = real_targets[:,:4].t().long()
-    real_targets[:,:2] = real_targets[:,:2] - torch.cat( (targets_cell_x.unsqueeze(1),targets_cell_y.unsqueeze(1)), 1)
+    real_targets[:,2:4] = real_targets[:,2:4] - torch.cat( (targets_cell_x.unsqueeze(1),targets_cell_y.unsqueeze(1)), 1)
 
     feature_targets['tboxes'] = real_targets[:, 2:6]
     feature_targets['indices'] = (img_ids, used_anchor_idx, targets_cell_x, targets_cell_y)
