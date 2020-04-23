@@ -70,13 +70,14 @@ def get_yolo_loss(model, yolo_outs, targets, regression_loss_type='GIoU'):
                 # box regression loss
                 reg_iou_loss, reg_iou = regression_loss(yolo_out, feature_targets, regression_loss_type)
                 reg_loss += reg_iou_loss
+                #print(" -reg_loss : ", reg_loss)
 
-                fl_gamma = model.hyp['fl_gamma']
                 # cls loss
-                cls_loss += classification_loss(yolo_out, feature_targets, fl_gamma, cls_loss_type='BCE')
+                cls_loss += classification_loss(yolo_out, feature_targets, model, cls_loss_type='BCE')
+                #print(" - cls_loss : ", cls_loss)
 
             # objectness loss
-            obj_loss += objectness_loss(yolo_out, feature_targets, reg_iou, model.iou_ratio, fl_gamma, obj_loss_type='BCE')
+            obj_loss += objectness_loss(yolo_out, feature_targets, reg_iou, model, obj_loss_type='BCE')
 
     # gain are from https://github.com/ultralytics/yolov3/issues/310 
     reg_loss *= model.hyp['reg_loss_gain'] # giou loss gain
@@ -111,27 +112,32 @@ def regression_loss(yolo_out, feature_targets, regression_loss_type, red='mean')
     return reg_iou_loss, reg_iou.detach()
 
 # loss of objectness for each grid
-def objectness_loss(yolo_out, feature_targets, reg_iou, iou_ratio, fl_gamma, obj_loss_type='BCE'):
+def objectness_loss(yolo_out, feature_targets, reg_iou, model, obj_loss_type='BCE'):
+    pos_weight = torch.cuda.FloatTensor([model.hyp['obj_pw']])
     if obj_loss_type == 'BCE':
-        obj_func = torch.nn.BCEWithLogitsLoss(reduction='mean')
+        obj_func = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='mean')
 
-    obj_func = FocalLoss(obj_func, fl_gamma)
+    if model.hyp['use_focal_loss']:
+        obj_func = FocalLoss(obj_func, model.hyp['fl_gamma'])
 
     labels_obj = torch.zeros_like(yolo_out[..., 0])
    
     if reg_iou is not None: # reg_iou is not None
         img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
-
+        
+        iou_ratio = model.iou_ratio
         labels_obj[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y] = (1.0 - iou_ratio) + iou_ratio * reg_iou.detach().clamp(0).type(labels_obj.dtype)
 
     return obj_func(yolo_out[...,4], labels_obj)
 
 # loss of classes
-def classification_loss(yolo_out, feature_targets, fl_gamma, cls_loss_type='BCE'):
+def classification_loss(yolo_out, feature_targets, model, cls_loss_type='BCE'):
+    pos_weight = torch.cuda.FloatTensor([model.hyp['cls_pw']])
     if cls_loss_type == 'BCE':
-        cls_func = torch.nn.BCEWithLogitsLoss(reduction='mean')
+        cls_func = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='mean')
     
-    cls_func = FocalLoss(cls_func, fl_gamma)
+    if model.hyp['use_focal_loss']:
+        cls_func = FocalLoss(cls_func, model.hyp['fl_gamma'])
 
     img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
     # select_out shape is [num_real_targets, 85]
