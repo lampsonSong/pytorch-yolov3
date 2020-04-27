@@ -45,7 +45,7 @@ def ConvBnLeakyRelu(input_channels, output_channels, kernel_size =3, stride=1, g
         nn.Conv2d(input_channels, output_channels, kernel_size, stride, padding, groups=groups, bias=False)
         )
     seq.add_module('BatchNorm2d',
-        nn.BatchNorm2d(output_channels)
+        nn.BatchNorm2d(output_channels, momentum=0.1)
         )
     seq.add_module('activation',
         nn.LeakyReLU(0.1, inplace=True)
