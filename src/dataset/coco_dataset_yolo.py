@@ -27,7 +27,13 @@ from utils.utils import scale_coords
 
 # from https://github.com/ultralytics/yolov3 utils/dataset.py
 def letterbox(img, new_shape=(416, 416), color=(128, 128, 128),
-              auto=True, scaleFill=False, scaleup=True, interp=cv2.INTER_LINEAR):
+            auto=True, scaleFill=False, scaleup=True, interp=cv2.INTER_LINEAR):
+    
+    # Handle images with less than three channels
+    if len(img.shape) != 3:
+       img = img.unsqueeze(0)
+       img = img.expand((3, img.shape[1:]))
+
     # Resize image to a 32-pixel-multiple rectangle https://github.com/ultralytics/yolov3/issues/232
     shape = img.shape[:2]  # current shape [height, width]
     if isinstance(new_shape, int):
@@ -84,12 +90,23 @@ class COCODatasetYolo(COCODataset):
                     translate_percent=(-0.05,0.05),
                     ),
                 iaa.Fliplr(p=0.5),
-                iaa.MultiplyHueAndSaturation((0.5,1.5), per_channel=True)
+                iaa.MultiplyHueAndSaturation((0.5,1.5), per_channel=True),
+                iaa.CropToFixedSize(
+                    width=self.img_size,
+                    height=self.img_size
+                    ),
                 ])
 
+        self.mosaic = self.augmentation
+
     def __getitem__(self, index):
-        lettered_img, ratio, pad, orig_img = self.load_image(index)
-        targets, ia_boxes = self.load_box_annotation_yolo(index, ratio, pad)
+        if self.mosaic:
+            lettered_img, targets, (h0, w0), ia_boxes = self.load_mosaic(index)
+        else:
+            img, (h0, w0) = self.load_image(index, b_resize=False)
+            # resize image keeping ratio
+            lettered_img, ratio, pad = letterbox(img, (self.img_size, self.img_size), auto=False)
+            targets, ia_boxes = self.load_box_annotation_yolo(index, ratio, pad)
 
         if self.augmentation:
             lettered_img, aug_ia_boxes = self.aug_seq(image=lettered_img, bounding_boxes=ia_boxes)
@@ -99,7 +116,7 @@ class COCODatasetYolo(COCODataset):
                 targets[i][2], targets[i][3] = torch.tensor(aug_ia_box.x1), torch.tensor(aug_ia_box.y1)
                 targets[i][4], targets[i][5] = torch.tensor(aug_ia_box.x2), torch.tensor(aug_ia_box.y2)
 
-        # label from [x1, y1, x2, y2] to [cx, cy, w, h] and noralization
+        # #label from [x1, y1, x2, y2] to [cx, cy, w, h] and noralization
         lettered_img_shape = torch.tensor(lettered_img.shape[:2]).repeat(1,2).unsqueeze(0)
         targets[:,2:6] = x1y1x2y2_2_cxcywh(targets[:,2:6]) / lettered_img_shape
 
@@ -112,26 +129,28 @@ class COCODatasetYolo(COCODataset):
         lettered_img = torch.from_numpy(lettered_img)
         # from [w,h,c] to [1,c,w,h]
         lettered_img = lettered_img.permute(2,0,1)
+        
 
         # orig_img and img_id for coco mAP
         img_id = (self.image_ids[index])
-        return lettered_img, targets, orig_img, img_id
+        return lettered_img, targets, (h0, w0), img_id
 
-    def load_image(self, index):
+    def load_image(self, index, b_resize=True):
         img_info = self.coco.loadImgs(self.image_ids[index])[0]
         img_path = os.path.join(self.coco_dir, 'images', self.set_name, img_info['file_name'])
        
         img = cv2.imread(img_path)
+        h0, w0 = img.shape[:2] # origin shape
         
-        # resize image keeping ratio
-        lettered_img, ratio, pad = letterbox(img, (self.img_size, self.img_size), auto=False)
-
-        # Handle images with less than three channels
-        if len(lettered_img.shape) != 3:
-            lettered_img = lettered_img.unsqueeze(0)
-            lettered_img = lettered_img.expand((3, img.shape[1:]))
-
-        return lettered_img, ratio, pad, img
+        if b_resize:
+            # resize image
+            r = self.img_size / max(h0, w0)
+            if r < 1 or (self.augmentation and (r != 1)): # only scale up when training
+                interp = cv2.INTER_LINEAR if self.augmentation else cv2.INTER_AREA
+                img = cv2.resize(img, (int(w0 * r), int(h0 * r)), interpolation=interp)
+            return img, (h0, w0), img.shape[:2]
+        else:
+            return img, (h0, w0)
 
 
     def load_box_annotation_yolo(self, index, ratio, pad):
@@ -157,9 +176,60 @@ class COCODatasetYolo(COCODataset):
 
         return boxes, ia_boxes
 
+    def load_mosaic(self, index):
+        # load image in a mosaic
+
+        labels4 = torch.zeros(0,6)
+        s = self.img_size
+        xc, yc = [int(random.uniform(s*0.5, s*1.5)) for _ in range(2)] # mosaice center
+        img4 = np.zeros((s*2, s*2, 3), dtype=np.uint8) + 128
+        indices = [index] + [random.randint(0, len(self.image_ids)-1) for _ in range(3)] # random select 3 other images
+
+        for i, index in enumerate(indices):
+            # load image
+            img, (h0, w0), (h,w) = self.load_image(index, b_resize=True)
+        
+            # place img in img4
+            if i == 0:  # top left
+                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
+            elif i == 1:  # top right
+                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
+                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            elif i == 2:  # bottom left
+                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, max(xc, w), min(y2a - y1a, h)
+            elif i == 3:  # bottom right
+                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
+                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+
+            img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+            padw = x1a - x1b
+            padh = y1a - y1b
+
+
+            ratio = (float(h/h0), float(w/w0))
+            pad = (0,0,0,0)
+            targets, _ = self.load_box_annotation_yolo(index, ratio, pad)
+            
+            if targets.size()[0] > 0:
+                targets[:,2] = targets[:,2] + padw
+                targets[:,3] = targets[:,3] + padh
+                targets[:,4] = targets[:,4] + padw
+                targets[:,5] = targets[:,5] + padh
+            
+            labels4 = torch.cat((labels4, targets), 0)
+        
+        # ia box
+        ia_boxes = ia.BoundingBoxesOnImage([
+            ia.BoundingBox(x1=label[2], x2=label[4], y1=label[3], y2=label[5]) for label in labels4
+            ], shape=img4.shape[:2])
+
+
+        return img4, labels4, (h0, w0), ia_boxes
 
     def collate_fn(self, batch):
-        imgs, targets, orig_imgs_tuple, img_id_tuple = list(zip(*batch))
+        imgs, targets, orig_shape_tuple, img_id_tuple = list(zip(*batch))
         
         # remove empty placeholder targets, from tuple to list
         targets = [boxes for boxes in targets if boxes is not None]
@@ -176,19 +246,21 @@ class COCODatasetYolo(COCODataset):
         imgs = torch.stack([img for img in imgs])
 
         self.batch_count += 1
-        return imgs, targets, orig_imgs_tuple, img_id_tuple
+        print(" - collate targets : ", targets)
+        return imgs, targets, orig_shape_tuple, img_id_tuple
 
 
 
 # sample of calling
 
 if __name__ == "__main__":
-    coco_dir = "/home/lampson/2T_disk/Data/COCO_CommonObjectsInContext/COCO_2014"
-    dataset = "val2014"
+    coco_dir = "/home/lampson/2T_disk/Data/COCO_CommonObjectsInContext/COCO_2017"
+    dataset = "val2017"
+    img_size = 608
     
-    test_dataset = COCODatasetYolo(coco_dir, dataset, img_size=608, phase='Train')
+    test_dataset = COCODatasetYolo(coco_dir, dataset, img_size=img_size, phase='Train')
     test_params = {
-            "batch_size" : 2,
+            "batch_size" : 1,
             "shuffle" : False,
             "drop_last" : False,
             "num_workers" : 0,
