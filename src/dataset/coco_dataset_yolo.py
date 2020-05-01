@@ -246,8 +246,7 @@ class COCODatasetYolo(COCODataset):
         imgs = torch.stack([img for img in imgs])
 
         self.batch_count += 1
-        print(" - collate targets : ", targets)
-        return imgs, targets, orig_shape_tuple, img_id_tuple
+        return imgs, targets, img_id_tuple, orig_shape_tuple
 
 
 
