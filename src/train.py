@@ -27,11 +27,14 @@ from coco_eval import convert_out_format, save_json, get_coco_eval, coco80_to_co
 
 hyp = {
     'weight_decay' : 0.00484,
-    'reg_loss_gain' : 0.1,
+    'reg_loss_gain' : 3.54,
     'obj_loss_gain' : 64.3,
     'cls_loss_gain' : 37.4,
     'train_iou_thresh' : 0.225,
-    'fl_gamma' : 2.
+    'fl_gamma' : 2.,
+    'cls_pw' : 1.0,
+    'obj_pw' : 1.0,
+    'use_focal_loss' : False
 }
 
 def get_dataloader(args, local_rank):
@@ -39,7 +42,7 @@ def get_dataloader(args, local_rank):
         # train dataloader
         train_dataset = COCODatasetYolo(
                 coco_dir=args.coco_dir, 
-                set_name='train2017', 
+                set_name=args.train_set, 
                 img_size=args.img_size,
                 multiscale=args.multi_scale_training,
                 phase='Train'
@@ -62,7 +65,7 @@ def get_dataloader(args, local_rank):
     # test dataloader
     test_dataset = COCODatasetYolo(
             coco_dir=args.coco_dir, 
-            set_name='val2017', 
+            set_name=args.test_set, 
             img_size=args.img_size, 
             phase='Test'
             )
@@ -179,6 +182,33 @@ def train_yolo(gpu, args):
                 if(len(targets) == 0):
                     continue
 
+                ### uncommet to vis img
+                #import cv2
+                #orig_img = imgs[0]                                                                                                                                                                          
+                #orig_img = orig_img.permute(1,2,0).numpy().copy()
+                #targets_c = targets.clone()
+                #current_shape = orig_img.shape[:2]
+                #det = torch.zeros(targets.shape[0], 4)
+                ##print(' - targets : ', targets[:,2:6])
+                #det = targets_c[:,2:6]
+                ## uncommet to vis train image and targets
+                #for cx, cy, w, h in det:
+                #    cx = int(cx.numpy() * current_shape[0])
+                #    cy = int(cy.numpy() * current_shape[1])
+                #    w = int(w.numpy() * current_shape[0])
+                #    h = int(h.numpy() * current_shape[1])
+                #
+                #    x1 = int(cx - w / 2) 
+                #    y1 = int(cy - h / 2)
+                #    x2 = int(cx + w / 2)
+                #    y2 = int(cy + h / 2)
+                #
+                #    cv2.rectangle( orig_img, (x1, y1), (x2, y2), (0,0,255), 2)
+                #
+                #cv2.imshow("- i", orig_img)                                                           
+                #cv2.waitKey(0)
+
+
                 ni = idx + epoch * len(train_loader)
 
                 imgs = imgs.cuda(gpu, non_blocking=True).float() / 255.
@@ -194,7 +224,8 @@ def train_yolo(gpu, args):
                     print('WARNING: non-finite loss, ending training ', loss_items)
                     return results
 
-                loss /= args.accumulate
+                # why nomial loss with batch size 64?
+                loss *= args.batch_size / 64
 
                 if args.mixed_precision:
                     with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -298,6 +329,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--coco_dir', type=str, default='../data/coco')
     parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--train_set', type=str, default='train2017')
+    parser.add_argument('--test_set', type=str, default='val2017')
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--img_size', type=int, default=416)
     parser.add_argument('--num_workers', type=int, default=0)
