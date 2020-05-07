@@ -162,7 +162,7 @@ class YOLOv3_SPP(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        for m in self.module_list:
+        for idx, m in enumerate(self.module_list):
             if isinstance(m, nn.Sequential):
                 for s in m:
                     if isinstance(s, nn.Conv2d):
@@ -190,11 +190,11 @@ class YOLOv3_SPP(nn.Module):
                 ## arc is default
                 b = [-4.5, p] # obj, cls
 
-                bias = self.module_list[-2][0].bias.view(m.num_anchors, -1)
+                bias = self.module_list[idx-1][0].bias.view(m.num_anchors, -1)
                 bias[:, 4] += b[0] - bias[:, 4].mean() # obj
                 bias[:, 5] += b[1] - bias[:, 5:].mean() # cls
 
-                self.module_list[-2][0].bias = torch.nn.Parameter(bias.view(-1))
+                self.module_list[idx-1][0].bias = torch.nn.Parameter(bias.view(-1))
 
 
 
@@ -204,8 +204,6 @@ class YOLOv3_SPP(nn.Module):
         img_max_side = max(x.shape[-2:])
 
         for idx, module in enumerate(self.module_list):
-            #if idx == 0:
-            #    print(" index 0, grads : ", module[0].weight.grad)
             if isinstance(module, weightedFeatureFusion):
                 x = module(x, outputs)
                 outputs.append(x)
@@ -213,11 +211,14 @@ class YOLOv3_SPP(nn.Module):
                 x = module(outputs)
                 outputs.append(x)
             elif isinstance(module, YOLOLayer):
+                #print(' - x : ', x)
                 out = module(x,img_max_side)
                 yolo_out.append(out)
                 outputs.append(out)
             else:
                 x = module(x)
+                #if idx == 0:
+                #    print(" x : ", x)
                 outputs.append(x)
 
         if self.training:
