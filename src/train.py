@@ -89,16 +89,7 @@ def get_dataloader(args, local_rank):
 def train_yolo(gpu, args):
     local_rank = args.node_rank * args.gpus + gpu
 
-    if torch.cuda.is_available():
-        if args.world_size > 1:
-            dist.init_process_group(
-                    backend = 'nccl', # distributed backend
-                    init_method = 'env://',
-                    #init_method = 'tcp://127.0.0.1:9998', # distributed training init method
-                    world_size = args.world_size, # number of nodes for distributed training
-                    rank = local_rank # distributed training node rank
-                    )
-    else:
+    if not torch.cuda.is_available():
         print("CUDA is not available")
         exit(0)
 
@@ -137,30 +128,35 @@ def train_yolo(gpu, args):
 
     if args.mixed_precision:
         model, optimizer = apex.amp.initialize(model, optimizer, opt_level='O1', verbosity=0)
-        model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
-    else:
-        if args.world_size > 1:
-            model = torch.nn.parallel.DistributedDataParallel(
-                    model, 
-                    device_ids=[gpu],
-                    find_unused_parameters=True)
+        #model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
+    #else:
+    if args.world_size > 1:
+        dist.init_process_group(
+                backend = 'nccl', # distributed backend
+                init_method = 'env://',
+                #init_method = 'tcp://127.0.0.1:9998', # distributed training init method
+                world_size = args.world_size, # number of nodes for distributed training
+                rank = local_rank # distributed training node rank
+                )
+        model = torch.nn.parallel.DistributedDataParallel(
+                model, 
+                device_ids=[gpu],
+                find_unused_parameters=True)
 
     start_epoch = 0
 
-    # resume TODO
+    # resume
     if args.resume and os.path.exists(args.resume):
         checkpoint = torch.load(args.resume, map_location="cuda:{}".format(local_rank))
         if args.world_size > 1:
-            model.module.load_state_dict(checkpoint['state_dict'])
+            model.module.load_state_dict(checkpoint['model'])
         else:
-            model.load_state_dict(checkpoint['state_dict'])
-            #model.load_state_dict(checkpoint['model'])
+            model.load_state_dict(checkpoint['model'])
 
         start_epoch = checkpoint['epoch']
 
 
-
-    # scheduler, cosine 
+    # scheduler, cosine
     lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
     scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
     scheduler.last_epoch = start_epoch
@@ -182,16 +178,16 @@ def train_yolo(gpu, args):
                 if(len(targets) == 0):
                     continue
 
-                ### uncommet to vis img
+                #print('- targets : ', targets)
+                ### uncommet to vis train image and targets
                 #import cv2
-                #orig_img = imgs[0]                                                                                                                                                                          
+                #orig_img = imgs[0]
                 #orig_img = orig_img.permute(1,2,0).numpy().copy()
                 #targets_c = targets.clone()
                 #current_shape = orig_img.shape[:2]
                 #det = torch.zeros(targets.shape[0], 4)
                 ##print(' - targets : ', targets[:,2:6])
                 #det = targets_c[:,2:6]
-                ## uncommet to vis train image and targets
                 #for cx, cy, w, h in det:
                 #    cx = int(cx.numpy() * current_shape[0])
                 #    cy = int(cy.numpy() * current_shape[1])
@@ -207,7 +203,6 @@ def train_yolo(gpu, args):
                 #
                 #cv2.imshow("- i", orig_img)                                                           
                 #cv2.waitKey(0)
-
 
                 ni = idx + epoch * len(train_loader)
 
@@ -263,12 +258,13 @@ def train_yolo(gpu, args):
             processed_ids = []
             coco91cls = coco80_to_coco91_class()
             tbar = tqdm(enumerate(test_loader), total=len(test_loader))
-            for idx, (imgs, targets, orig_imgs_tuple, img_id_tuple) in tbar:
+            for idx, (imgs, targets, img_id_tuple, orig_shape_tuple) in tbar:
                 if(len(targets) == 0):
                     continue
 
+                c_img = imgs[0].permute(1,2,0).numpy().copy()
+                
                 imgs = imgs.to(test_device).float() / 255.
-                targets = targets.to(test_device)
 
                 # run model
                 with torch.no_grad():
@@ -277,12 +273,10 @@ def train_yolo(gpu, args):
                     outputs = non_max_suppression(yolo_outs, conf_thres=thres_out)
                     for i, det in enumerate(outputs):
                         if not isinstance(det, torch.Tensor):
-                            print("det is none")
                             continue
 
-
-                        orig_img = orig_imgs_tuple[i]
-                        det[:, :4] = scale_coords(test_input_shape, det[:, :4], orig_img.shape).round()
+                        orig_img_shape = orig_shape_tuple[i]
+                        det[:, :4] = scale_coords(test_input_shape, det[:, :4], orig_img_shape).round()
                         img_result = convert_out_format(img_id_tuple[i], det, coco91cls, thres_out)
                         if img_result:
                             processed_ids.append(img_id_tuple[i])
@@ -292,10 +286,16 @@ def train_yolo(gpu, args):
                         ##print(results)
                         ## uncommet to vis results
                         #import cv2
+                        #max_boader, min_boader = max(orig_img_shape[1], orig_img_shape[0]), min(orig_img_shape[1], orig_img_shape[0])
+                        #c_img = cv2.resize(c_img, (max_boader, max_boader) )
                         #for x1, y1, x2, y2, conf, cls in det:
-                        #    cv2.rectangle( orig_img, (x1, y1), (x2, y2), (0,0,255), 2)
+                        #    padded_v = (max_boader - min_boader) / 2
+                        #    if max_boader == orig_img_shape[1]:
+                        #        cv2.rectangle( c_img, (x1, y1+padded_v), (x2, y2+padded_v), (0,0,255), 2)
+                        #    else:
+                        #        cv2.rectangle( c_img, (x1+padded_v, y1), (x2+padded_v, y2), (0,0,255), 2)
 
-                        #cv2.imshow("- i", orig_img)
+                        #cv2.imshow("- i", c_img)
                         #cv2.waitKey(0)
 
             # save results for new test
@@ -306,7 +306,7 @@ def train_yolo(gpu, args):
             test_status = get_coco_eval(val_file, pred_file, processed_ids)
 
             if args.test_only:
-                continue
+                break
             else:
                 # save model
                 if local_rank == 0 and test_status[0] > best_mAP:
@@ -317,7 +317,7 @@ def train_yolo(gpu, args):
                         state_dict = model.state_dict()
 
                     state = {
-                            'state_dict' : state_dict,
+                            'model' : state_dict,
                             #'optimizer' : optimizer.state_dict(),
                             'epoch' : epoch,
                             #'scheduler' : scheduler.state_dict()
@@ -352,7 +352,6 @@ if __name__ == "__main__":
         os.environ['MASTER_PORT'] = '9997'
         mp.spawn(train_yolo, nprocs=args.gpus, args=(args,))
     else:
-        args.mixed_precision = False
         train_yolo(0, args)
 
     print("done")
