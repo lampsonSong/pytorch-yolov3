@@ -10,8 +10,11 @@ import torch
 import torch.nn as nn
 from net.yolo_layer import YOLOLayer
 import math
+import numpy as np
 
 anchors = torch.FloatTensor([[10.,13], [16,30], [33,23], [30,61], [62,45], [59,119], [116,90], [156,198], [373,326]])
+
+torch.set_printoptions(precision=5)
 
 def Conv(input_channels, output_channels, kernel_size =3, stride=1, groups=1, bias=False):
     padding = (kernel_size - 1) // 2
@@ -163,27 +166,28 @@ class YOLOv3_SPP(nn.Module):
 
     def _initialize_weights(self):
         for idx, m in enumerate(self.module_list):
-            if isinstance(m, nn.Sequential):
-                for s in m:
-                    if isinstance(s, nn.Conv2d):
-                        nn.init.kaiming_normal_(s.weight, mode='fan_out')
-                        if s.bias is not None:
-                            nn.init.zeros_(s.bias)
-                    elif isinstance(s, nn.BatchNorm2d):
-                        nn.init.ones_(s.weight)
-                        nn.init.zeros_(s.bias)
-            elif isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, YOLOLayer):
+            #if isinstance(m, nn.Sequential):
+            #    for s in m:
+            #        if isinstance(s, nn.Conv2d):
+            #            nn.init.kaiming_normal_(s.weight, mode='fan_out')
+            #            if s.bias is not None:
+            #                nn.init.zeros_(s.bias)
+            #        elif isinstance(s, nn.BatchNorm2d):
+            #            nn.init.ones_(s.weight)
+            #            nn.init.zeros_(s.bias)
+            #elif isinstance(m, nn.Conv2d):
+            #    nn.init.kaiming_normal_(m.weight, mode='fan_out')
+            #    if m.bias is not None:
+            #        nn.init.zeros_(m.bias)
+            #elif isinstance(m, nn.BatchNorm2d):
+            #    nn.init.ones_(m.weight)
+            #    nn.init.zeros_(m.bias)
+            #elif isinstance(m, nn.Linear):
+            #    nn.init.normal_(m.weight, 0, 0.01)
+            #    if m.bias is not None:
+            #        nn.init.zeros_(m.bias)
+            #elif isinstance(m, YOLOLayer):
+            if isinstance(m, YOLOLayer):
                 # Initialize preceding Conv2d() bias (https://arxiv.org/pdf/1708.02002.pdf section 3.3)
                 p = math.log(1 / (m.num_classes - 0.99))
 
@@ -192,9 +196,11 @@ class YOLOv3_SPP(nn.Module):
 
                 bias = self.module_list[idx-1][0].bias.view(m.num_anchors, -1)
                 bias[:, 4] += b[0] - bias[:, 4].mean() # obj
-                bias[:, 5] += b[1] - bias[:, 5:].mean() # cls
+                bias[:, 5:] += b[1] - bias[:, 5:].mean() # cls
 
                 self.module_list[idx-1][0].bias = torch.nn.Parameter(bias.view(-1))
+                #print('----------------')
+                #print(self.module_list[idx-1][0].bias)
 
 
 
@@ -211,14 +217,11 @@ class YOLOv3_SPP(nn.Module):
                 x = module(outputs)
                 outputs.append(x)
             elif isinstance(module, YOLOLayer):
-                #print(' - x : ', x)
                 out = module(x,img_max_side)
                 yolo_out.append(out)
                 outputs.append(out)
             else:
                 x = module(x)
-                #if idx == 0:
-                #    print(" x : ", x)
                 outputs.append(x)
 
         if self.training:
