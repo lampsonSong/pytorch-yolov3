@@ -91,10 +91,6 @@ class COCODatasetYolo(COCODataset):
                     ),
                 iaa.Fliplr(p=0.5),
                 iaa.MultiplyHueAndSaturation((0.5,1.5), per_channel=True),
-                iaa.CropToFixedSize(
-                    width=self.img_size,
-                    height=self.img_size
-                    ),
                 ])
 
         self.mosaic = self.augmentation
@@ -110,6 +106,13 @@ class COCODatasetYolo(COCODataset):
 
         if self.augmentation:
             lettered_img, aug_ia_boxes = self.aug_seq(image=lettered_img, bounding_boxes=ia_boxes)
+            self.crop_img_aug = iaa.Sequential([
+                iaa.CropToFixedSize(
+                    width=self.img_size,
+                    height=self.img_size
+                    ),
+                ])
+            lettered_img, aug_ia_boxes = self.crop_img_aug(image=lettered_img, bounding_boxes=aug_ia_boxes)
 
             for i,aug_ia_box in enumerate(aug_ia_boxes):
                 #print(i," - aug_ia_box : ", aug_ia_box)
