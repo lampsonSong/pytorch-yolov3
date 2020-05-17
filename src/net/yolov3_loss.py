@@ -89,9 +89,9 @@ def get_yolo_loss(model, yolo_outs, targets, regression_loss_type='GIoU'):
 
 # regression loss of boxes
 def regression_loss(yolo_out, feature_targets, regression_loss_type, red='mean'):
-    img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
+    img_ids, used_anchor_idx, targets_cell_y, targets_cell_x = feature_targets['indices']
     # select_out shape is [num_real_targets, 85]
-    select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y]
+    select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_y, targets_cell_x]
 
     select_boxes_xy = torch.sigmoid(select_out[:,:2]) # sig(tx) + cx & sig(ty) + cy
     select_boxes_wh = torch.exp(select_out[:,2:4]).clamp(max=1E3) * feature_targets['used_anchor_vec']
@@ -120,10 +120,10 @@ def objectness_loss(yolo_out, feature_targets, reg_iou, model, obj_loss_type='BC
     labels_obj = torch.zeros_like(yolo_out[..., 0])
    
     if reg_iou is not None: # reg_iou is not None
-        img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
+        img_ids, used_anchor_idx, targets_cell_y, targets_cell_x = feature_targets['indices']
         
         iou_ratio = model.iou_ratio
-        labels_obj[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y] = (1.0 - iou_ratio) + iou_ratio * reg_iou.detach().clamp(0).type(labels_obj.dtype)
+        labels_obj[img_ids, used_anchor_idx, targets_cell_y, targets_cell_x] = (1.0 - iou_ratio) + iou_ratio * reg_iou.detach().clamp(0).type(labels_obj.dtype)
 
     return obj_func(yolo_out[...,4], labels_obj)
 
@@ -136,9 +136,9 @@ def classification_loss(yolo_out, feature_targets, model, cls_loss_type='BCE'):
     if model.hyp['use_focal_loss']:
         cls_func = FocalLoss(cls_func, model.hyp['fl_gamma'])
 
-    img_ids, used_anchor_idx, targets_cell_x, targets_cell_y = feature_targets['indices']
+    img_ids, used_anchor_idx, targets_cell_y, targets_cell_x = feature_targets['indices']
     # select_out shape is [num_real_targets, 85]
-    select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_x, targets_cell_y]
+    select_out = yolo_out[img_ids, used_anchor_idx, targets_cell_y, targets_cell_x]
     
     labels_cls = torch.zeros_like(select_out[:,5:])
 
@@ -192,10 +192,11 @@ def convert_targets_to_feature_level(yolo_layer, targets, train_iou_thresh=0.):
 
     # combine indices, convet data type to 64bit long int
     img_ids, cls, targets_cell_x, targets_cell_y = real_targets[:,:4].t().long()
+    # center_x , center_y minus cell_x , cell_y
     real_targets[:,2:4] = real_targets[:,2:4] - torch.cat( (targets_cell_x.unsqueeze(1),targets_cell_y.unsqueeze(1)), 1)
 
     feature_targets['tboxes'] = real_targets[:, 2:6]
-    feature_targets['indices'] = (img_ids, used_anchor_idx, targets_cell_x, targets_cell_y)
+    feature_targets['indices'] = (img_ids, used_anchor_idx, targets_cell_y, targets_cell_x)
     feature_targets['used_anchor_vec'] = anchor_vec[used_anchor_idx] 
     feature_targets['tcls'] = cls
 
