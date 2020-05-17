@@ -333,7 +333,7 @@ if __name__ == "__main__":
     parser.add_argument('--test_set', type=str, default='val2017')
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--img_size', type=int, default=416)
-    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--nodes', type=int, default=1)
     parser.add_argument('--node_rank', type=int, default=0, help='ranking of the nodes')
     parser.add_argument('--gpus', type=int, default='2', help='number of gpus per node')
