@@ -71,15 +71,18 @@ def get_dataloader(args, local_rank):
             )
     # number of classes from dataset
     args.num_classes = test_dataset.num_classes
-    
-    test_loader = DataLoader(
-            dataset = test_dataset, 
-            batch_size = 1,
-            num_workers = args.num_workers,
-            shuffle = False,
-            pin_memory = True,
-            collate_fn = test_dataset.collate_fn
-            )
+        
+    if(local_rank == 0):
+        test_loader = DataLoader(
+                dataset = test_dataset, 
+                batch_size = 1,
+                num_workers = args.num_workers,
+                shuffle = False,
+                pin_memory = True,
+                collate_fn = test_dataset.collate_fn
+                )
+    else:
+        test_loader = None
 
     if args.test_only:
         return test_loader
@@ -337,7 +340,7 @@ if __name__ == "__main__":
     parser.add_argument('--nodes', type=int, default=1)
     parser.add_argument('--node_rank', type=int, default=0, help='ranking of the nodes')
     parser.add_argument('--gpus', type=int, default='2', help='number of gpus per node')
-    parser.add_argument('--epoches', type=int, default='100', help='number of epoches to run')
+    parser.add_argument('--epoches', type=int, default='200', help='number of epoches to run')
     parser.add_argument('--lr', type=float, default='1e-3')
     parser.add_argument('--momentum', type=float, default='0.99')
     parser.add_argument('--multi_scale_training', type=bool, default=True)
