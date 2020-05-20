@@ -72,18 +72,15 @@ def get_dataloader(args, local_rank):
     # number of classes from dataset
     args.num_classes = test_dataset.num_classes
         
-    if(local_rank == 0):
-        test_loader = DataLoader(
-                dataset = test_dataset, 
-                batch_size = 1,
-                num_workers = args.num_workers,
-                shuffle = False,
-                pin_memory = True,
-                collate_fn = test_dataset.collate_fn
-                )
-    else:
-        test_loader = None
-
+    test_loader = DataLoader(
+            dataset = test_dataset, 
+            batch_size = 1,
+            num_workers = args.num_workers,
+            shuffle = False,
+            pin_memory = True,
+            collate_fn = test_dataset.collate_fn
+            )
+    
     if args.test_only:
         return test_loader
     else:
