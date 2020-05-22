@@ -16,6 +16,8 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
+from torch.utils.tensorboard import SummaryWriter
+
 import torch.multiprocessing as mp
 import apex
 
@@ -89,6 +91,8 @@ def get_dataloader(args, local_rank):
 def train_yolo(gpu, args):
     local_rank = args.node_rank * args.gpus + gpu
 
+    writer = SummaryWriter(args.log_path)
+
     if not torch.cuda.is_available():
         print("CUDA is not available")
         exit(0)
@@ -105,6 +109,9 @@ def train_yolo(gpu, args):
     model = YOLOv3_SPP(num_classes = args.num_classes)
     torch.cuda.set_device(gpu)
     model.cuda(gpu)
+
+    dummy_input = torch.randn(1, 3, args.img_size, args.img_size)
+    writer.add_graph(model, dummy_input)
 
     # add optimizer to parameters of the model
     param_g0, param_g1, param_g2 = [], [], []
@@ -153,13 +160,18 @@ def train_yolo(gpu, args):
         else:
             model.load_state_dict(checkpoint['model'])
 
-        start_epoch = checkpoint['epoch']
+        #start_epoch = checkpoint['epoch']
 
 
-    # scheduler, cosine
-    lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
+    ## scheduler, lambda
+    #lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
+    # scheduler cosine
+    total_steps = len(train_loader) * args.epoches
+    lr_func = lambda step : (step * 100 / args.warm_steps) if step < args.warm_steps else 0.5 * (math.cos((step - args.warm_steps)/( total_steps - args.warm_steps) * math.pi) + 1)
+    
     scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
     scheduler.last_epoch = start_epoch
+
 
     results = (0,0,0,0,0,0,0)
     model.hyp = hyp
@@ -227,6 +239,10 @@ def train_yolo(gpu, args):
                         scaled_loss.backward()
                 else:
                     loss.backward()
+            
+                writer.add_scalar("lr : ", optimizer.param_groups[0]['lr'])
+                # update scheduler
+                scheduler.step()
 
                 # optimize accumulated gradients
                 if ni % args.accumulate == 0:
@@ -235,14 +251,16 @@ def train_yolo(gpu, args):
 
                 # mean loss
                 mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
+                writer.add_scalar("Mean Loss : ", mean_loss)
+                writer.add_scalar("IOU Loss : ", loss_items[0])
+                writer.add_scalar("Obj Loss : ", loss_items[1])
+                writer.add_scalar("Cls Loss : ", loss_items[2])
                 mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
                 s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]))
                 #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
 
                 pbar.set_description(s)
 
-            # update scheduler
-            scheduler.step()
 
         '''
         Finished one epoch, save model
@@ -304,12 +322,13 @@ def train_yolo(gpu, args):
             val_file = os.path.join(args.coco_dir,'annotations/instances_val2017.json')
 
             test_status = get_coco_eval(val_file, pred_file, processed_ids)
+            writer.add_scalar("mAP@0.5:0.95 : ", test_status[0])
 
             if args.test_only:
                 break
             else:
                 # save model
-                if local_rank == 0 and test_status[0] > best_mAP:
+                if local_rank == 0:
                     best_mAP = test_status[0]
                     if args.world_size > 1:
                         state_dict = model.module.state_dict()
@@ -318,11 +337,14 @@ def train_yolo(gpu, args):
 
                     state = {
                             'model' : state_dict,
-                            #'optimizer' : optimizer.state_dict(),
+                            'optimizer' : optimizer.state_dict(),
                             'epoch' : epoch,
                             #'scheduler' : scheduler.state_dict()
                             }
-                    torch.save(state, "../weights/yolov3_epoch{}.pth".format(epoch))
+                    if test_status[0] > best_mAP:
+                        torch.save(state, "../weights/yolov3_best.pth".format(epoch))
+                    else:
+                        torch.save(state, "../weights/yolov3_last.pth".format(epoch))
 
 
 if __name__ == "__main__":
@@ -331,13 +353,15 @@ if __name__ == "__main__":
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--train_set', type=str, default='train2017')
     parser.add_argument('--test_set', type=str, default='val2017')
+    parser.add_argument('--log_path', type=str, default='../log')
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--img_size', type=int, default=416)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--nodes', type=int, default=1)
     parser.add_argument('--node_rank', type=int, default=0, help='ranking of the nodes')
+    parser.add_argument('--warmup_steps', type=int, default=500, help='ranking of the nodes')
     parser.add_argument('--gpus', type=int, default='2', help='number of gpus per node')
-    parser.add_argument('--epoches', type=int, default='200', help='number of epoches to run')
+    parser.add_argument('--epoches', type=int, default='150', help='number of epoches to run')
     parser.add_argument('--lr', type=float, default='1e-3')
     parser.add_argument('--momentum', type=float, default='0.99')
     parser.add_argument('--multi_scale_training', type=bool, default=True)
