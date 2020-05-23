@@ -110,9 +110,6 @@ def train_yolo(gpu, args):
     torch.cuda.set_device(gpu)
     model.cuda(gpu)
 
-    dummy_input = torch.randn(1, 3, args.img_size, args.img_size)
-    writer.add_graph(model, dummy_input)
-
     # add optimizer to parameters of the model
     param_g0, param_g1, param_g2 = [], [], []
     for k, v in dict(model.named_parameters()).items():
@@ -135,8 +132,7 @@ def train_yolo(gpu, args):
 
     if args.mixed_precision:
         model, optimizer = apex.amp.initialize(model, optimizer, opt_level='O1', verbosity=0)
-        #model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
-    #else:
+    
     if args.world_size > 1:
         dist.init_process_group(
                 backend = 'nccl', # distributed backend
@@ -167,7 +163,7 @@ def train_yolo(gpu, args):
     #lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
     # scheduler cosine
     total_steps = len(train_loader) * args.epoches
-    lr_func = lambda step : (step * 100 / args.warm_steps) if step < args.warm_steps else 0.5 * (math.cos((step - args.warm_steps)/( total_steps - args.warm_steps) * math.pi) + 1)
+    lr_func = lambda x : (x * 100 / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
     
     scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
     scheduler.last_epoch = start_epoch
@@ -234,27 +230,25 @@ def train_yolo(gpu, args):
                 # why nomial loss with batch size 64?
                 loss *= args.batch_size / 64
 
+                optimizer.zero_grad()
                 if args.mixed_precision:
                     with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
                 else:
                     loss.backward()
             
-                writer.add_scalar("lr : ", optimizer.param_groups[0]['lr'])
+                optimizer.step()
+                
                 # update scheduler
                 scheduler.step()
-
-                # optimize accumulated gradients
-                if ni % args.accumulate == 0:
-                    optimizer.step()
-                    optimizer.zero_grad()
-
+                writer.add_scalar("lr : ", scheduler.get_last_lr()[0], ni)
+                
                 # mean loss
                 mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
-                writer.add_scalar("Mean Loss : ", mean_loss)
-                writer.add_scalar("IOU Loss : ", loss_items[0])
-                writer.add_scalar("Obj Loss : ", loss_items[1])
-                writer.add_scalar("Cls Loss : ", loss_items[2])
+                writer.add_scalar("Mean Loss : ", mean_loss[0])
+                writer.add_scalar("IOU Loss : ", mean_loss[1])
+                writer.add_scalar("Obj Loss : ", mean_loss[2])
+                writer.add_scalar("Cls Loss : ", mean_loss[3])
                 mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
                 s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]))
                 #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
@@ -359,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--nodes', type=int, default=1)
     parser.add_argument('--node_rank', type=int, default=0, help='ranking of the nodes')
-    parser.add_argument('--warmup_steps', type=int, default=500, help='ranking of the nodes')
+    parser.add_argument('--warmup_steps', type=int, default=300, help='ranking of the nodes')
     parser.add_argument('--gpus', type=int, default='2', help='number of gpus per node')
     parser.add_argument('--epoches', type=int, default='150', help='number of epoches to run')
     parser.add_argument('--lr', type=float, default='1e-3')
