@@ -79,7 +79,7 @@ def get_dataloader(args, local_rank):
             batch_size = 1,
             num_workers = args.num_workers,
             shuffle = False,
-            pin_memory = True,
+            pin_memory = False,
             collate_fn = test_dataset.collate_fn
             )
     
@@ -121,9 +121,9 @@ def train_yolo(gpu, args):
             param_g0 += [v]
 
     # optimizer use sgd
-    optimizer = optim.SGD(param_g0, lr=args.lr, momentum=args.momentum)
+    #optimizer = optim.SGD(param_g0, lr=args.lr, momentum=args.momentum)
     ## optimizer use adam
-    #optimizer = optim.Adam(param_g0, lr=args.lr)
+    optimizer = optim.Adam(param_g0, lr=args.lr)
 
     optimizer.add_param_group({'params': param_g1, 'weight_decay': hyp['weight_decay']})
     optimizer.add_param_group({'params': param_g2})
@@ -158,15 +158,17 @@ def train_yolo(gpu, args):
 
         #start_epoch = checkpoint['epoch']
 
+    if not args.test_only:
+        ## scheduler, lambda
+        #lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
+        # scheduler cosine
+        total_steps = len(train_loader) * args.epoches
+        if args.warmup_steps == 0:
+            args.warmup_steps = total_steps * 0.05
+        lr_func = lambda x : (x / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
 
-    ## scheduler, lambda
-    #lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
-    # scheduler cosine
-    total_steps = len(train_loader) * args.epoches
-    lr_func = lambda x : (x * 100 / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
-    
-    scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
-    scheduler.last_epoch = start_epoch
+        scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
+        scheduler.last_epoch = start_epoch
 
 
     results = (0,0,0,0,0,0,0)
@@ -245,10 +247,10 @@ def train_yolo(gpu, args):
                 
                 # mean loss
                 mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
-                writer.add_scalar("Mean Loss : ", mean_loss[0])
-                writer.add_scalar("IOU Loss : ", mean_loss[1])
-                writer.add_scalar("Obj Loss : ", mean_loss[2])
-                writer.add_scalar("Cls Loss : ", mean_loss[3])
+                writer.add_scalar("Mean Loss : ", mean_loss[0], ni)
+                writer.add_scalar("IOU Loss : ", mean_loss[1], ni)
+                writer.add_scalar("Obj Loss : ", mean_loss[2], ni)
+                writer.add_scalar("Cls Loss : ", mean_loss[3], ni)
                 mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
                 s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]))
                 #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
@@ -269,7 +271,8 @@ def train_yolo(gpu, args):
             results = []
             processed_ids = []
             coco91cls = coco80_to_coco91_class()
-            tbar = tqdm(enumerate(test_loader), total=len(test_loader))
+            #tbar = tqdm(enumerate(test_loader), total=len(test_loader))
+            tbar = tqdm(enumerate(test_loader))
             for idx, (imgs, targets, img_id_tuple, orig_shape_tuple) in tbar:
                 if(len(targets) == 0):
                     continue
@@ -316,7 +319,7 @@ def train_yolo(gpu, args):
             val_file = os.path.join(args.coco_dir,'annotations/instances_val2017.json')
 
             test_status = get_coco_eval(val_file, pred_file, processed_ids)
-            writer.add_scalar("mAP@0.5:0.95 : ", test_status[0])
+            writer.add_scalar("mAP@0.5:0.95 : ", test_status[0], epoch)
 
             if args.test_only:
                 break
@@ -353,10 +356,10 @@ if __name__ == "__main__":
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--nodes', type=int, default=1)
     parser.add_argument('--node_rank', type=int, default=0, help='ranking of the nodes')
-    parser.add_argument('--warmup_steps', type=int, default=300, help='ranking of the nodes')
+    parser.add_argument('--warmup_steps', type=int, default=0, help='ranking of the nodes')
     parser.add_argument('--gpus', type=int, default='2', help='number of gpus per node')
     parser.add_argument('--epoches', type=int, default='150', help='number of epoches to run')
-    parser.add_argument('--lr', type=float, default='1e-3')
+    parser.add_argument('--lr', type=float, default='1e-1')
     parser.add_argument('--momentum', type=float, default='0.99')
     parser.add_argument('--multi_scale_training', type=bool, default=True)
     parser.add_argument('--mixed_precision', type=bool, default=True)
