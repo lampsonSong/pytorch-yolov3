@@ -121,9 +121,9 @@ def train_yolo(gpu, args):
             param_g0 += [v]
 
     # optimizer use sgd
-    #optimizer = optim.SGD(param_g0, lr=args.lr, momentum=args.momentum)
+    optimizer = optim.SGD(param_g0, lr=args.lr, momentum=args.momentum)
     ## optimizer use adam
-    optimizer = optim.Adam(param_g0, lr=args.lr)
+    #optimizer = optim.Adam(param_g0, lr=args.lr)
 
     optimizer.add_param_group({'params': param_g1, 'weight_decay': hyp['weight_decay']})
     optimizer.add_param_group({'params': param_g2})
@@ -164,7 +164,7 @@ def train_yolo(gpu, args):
         # scheduler cosine
         total_steps = len(train_loader) * args.epoches
         if args.warmup_steps == 0:
-            args.warmup_steps = total_steps * 0.05
+            args.warmup_steps = total_steps * 0.01
         lr_func = lambda x : (x / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
 
         scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
@@ -358,8 +358,8 @@ if __name__ == "__main__":
     parser.add_argument('--node_rank', type=int, default=0, help='ranking of the nodes')
     parser.add_argument('--warmup_steps', type=int, default=0, help='ranking of the nodes')
     parser.add_argument('--gpus', type=int, default='2', help='number of gpus per node')
-    parser.add_argument('--epoches', type=int, default='150', help='number of epoches to run')
-    parser.add_argument('--lr', type=float, default='1e-1')
+    parser.add_argument('--epoches', type=int, default='80', help='number of epoches to run')
+    parser.add_argument('--lr', type=float, default='1e-2')
     parser.add_argument('--momentum', type=float, default='0.99')
     parser.add_argument('--multi_scale_training', type=bool, default=True)
     parser.add_argument('--mixed_precision', type=bool, default=True)
