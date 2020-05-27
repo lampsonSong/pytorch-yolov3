@@ -247,10 +247,10 @@ def train_yolo(gpu, args):
                 
                 # mean loss
                 mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
-                writer.add_scalar("Mean Loss : ", mean_loss[0], ni)
-                writer.add_scalar("IOU Loss : ", mean_loss[1], ni)
-                writer.add_scalar("Obj Loss : ", mean_loss[2], ni)
-                writer.add_scalar("Cls Loss : ", mean_loss[3], ni)
+                writer.add_scalar("Mean Loss : ", mean_loss[3], ni)
+                writer.add_scalar("IOU Loss : ", mean_loss[0], ni)
+                writer.add_scalar("Obj Loss : ", mean_loss[1], ni)
+                writer.add_scalar("Cls Loss : ", mean_loss[2], ni)
                 mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
                 s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]))
                 #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
@@ -358,7 +358,7 @@ if __name__ == "__main__":
     parser.add_argument('--node_rank', type=int, default=0, help='ranking of the nodes')
     parser.add_argument('--warmup_steps', type=int, default=0, help='ranking of the nodes')
     parser.add_argument('--gpus', type=int, default='2', help='number of gpus per node')
-    parser.add_argument('--epoches', type=int, default='80', help='number of epoches to run')
+    parser.add_argument('--epoches', type=int, default='120', help='number of epoches to run')
     parser.add_argument('--lr', type=float, default='1e-2')
     parser.add_argument('--momentum', type=float, default='0.99')
     parser.add_argument('--multi_scale_training', type=bool, default=True)
