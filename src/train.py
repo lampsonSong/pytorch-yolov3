@@ -229,8 +229,8 @@ def train_yolo(gpu, args):
                     print('WARNING: non-finite loss, ending training ', loss_items)
                     return results
 
-                # why nomial loss with batch size 64?
-                loss *= args.batch_size / 64
+                ## why nomial loss with batch size 64?
+                #loss *= args.batch_size / 64
 
                 optimizer.zero_grad()
                 if args.mixed_precision:
