@@ -326,7 +326,6 @@ def train_yolo(gpu, args):
             else:
                 # save model
                 if local_rank == 0:
-                    best_mAP = test_status[0]
                     if args.world_size > 1:
                         state_dict = model.module.state_dict()
                     else:
@@ -338,10 +337,11 @@ def train_yolo(gpu, args):
                             'epoch' : epoch,
                             #'scheduler' : scheduler.state_dict()
                             }
+                    
+                    torch.save(state, "../weights/yolov3_last.pth")
                     if test_status[0] > best_mAP:
-                        torch.save(state, "../weights/yolov3_best.pth".format(epoch))
-                    else:
-                        torch.save(state, "../weights/yolov3_last.pth".format(epoch))
+                        torch.save(state, "../weights/yolov3_best.pth")
+                        best_mAP = test_status[0]
 
 
 if __name__ == "__main__":
