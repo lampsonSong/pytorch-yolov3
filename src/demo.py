@@ -14,13 +14,17 @@ import sys
 
 image_demo = False
 video_demo = False
+dir_demo = False
+
 if (len(sys.argv) < 2):
-    print("Usage: python demo.py [image|video] test.jpg|test.mp4")
+    print("Usage: python demo.py [image|video|dir] test.jpg|test.mp4|./test")
 else:
     if(sys.argv[1] == 'image'):
         image_demo = True
     if(sys.argv[1] == 'video'):
         video_demo = True
+    if(sys.argv[1] == 'dir'):
+        dir_demo = True
 
 obj_list = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
             'fire hydrant', '', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep',
@@ -104,4 +108,12 @@ if video_demo:
         _, img = cap.read()
         process_img(img)
 
-
+if dir_demo:
+    if sys.argv[2] is None:
+        dir_path = './test'
+    else:
+        dir_path = sys.argv[2]
+        for root, dirs, files in os.walk(dir_path):
+            for fname in files:
+                img = cv2.imread(root+"/"+fname)
+                process_img(img)
