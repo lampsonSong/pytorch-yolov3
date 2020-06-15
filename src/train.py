@@ -351,7 +351,7 @@ if __name__ == "__main__":
     parser.add_argument('--train_set', type=str, default='train2017')
     parser.add_argument('--test_set', type=str, default='val2017')
     parser.add_argument('--log_path', type=str, default='../log')
-    parser.add_argument('--regression_loss_type', type=str, default='GIoU', help="GIoU | CIoU")
+    parser.add_argument('--regression_loss_type', type=str, default='GIoU', help="GIoU | CIoU | DIoU")
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--img_size', type=int, default=416)
     parser.add_argument('--num_workers', type=int, default=4)
