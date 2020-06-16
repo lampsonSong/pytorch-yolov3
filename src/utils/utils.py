@@ -265,6 +265,4 @@ def box_ciou(boxes1, boxes2, box_type='cxcywh'):
     outer = torch.clamp(out_max_xy - out_min_xy, min=0)
     outer_diag = outer[:,0] ** 2 + outer[:,2]**2
 
-    ciou = 1 - iou + inter_diag / outer_diag + alpha * v
-
-    return ciou
+    return iou - inter_diag / outer_diag - alpha * v
