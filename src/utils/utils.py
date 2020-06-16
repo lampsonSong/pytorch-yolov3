@@ -214,6 +214,31 @@ def box_giou(boxes1, boxes2, box_type='cxcywh'):
 
     return iou - (convex_area - union) / (convex_area)
 
+def box_diou(boxes1, boxes2, box_type='cxcywh'):
+    if box_type == 'cxcywh':
+        center_x1, center_y1, w1, h1 = boxes1[0], boxes1[1]
+        center_x2, center_y2, w2, h2 = boxes2[0], boxes2[1]
+        
+        boxes1 = cxcywh_2_x1y1x2y2(boxes1)
+        boxes2 = cxcywh_2_x1y1x2y2(boxes2)
+    
+    inter_area = torch.min(boxes1[:,2:4], boxes2[:,2:4]) - torch.max(boxes1[:,:2], boxes2[:,:2])
+    inter_area = inter_area.clamp(0).prod(1) + 1e-10
+
+    boxes1_area = (boxes1[:,2:4] - boxes1[:,:2]).prod(1) + 1e-10
+    boxes2_area = (boxes2[:,2:4] - boxes2[:,:2]).prod(1) + 1e-10
+    
+    union = boxes1_area + boxes2_area - inter_area + 1e-10
+    iou = inter_area / union
+    
+    inter_diag = (center_x2 - center_x1)**2 + (center_y2 - center_y1)**2
+    out_max_xy = torch.max(boxes1[:, 2:], boxes2[:,2:])
+    out_min_xy = torch.min(boxes1[:, :2], boxes2[:,:2])
+    outer = torch.clamp(out_max_xy - out_min_xy, min=0)
+    outer_diag = outer[:,0] ** 2 + outer[:,2]**2
+
+    return iou - inter_diag / outer_diag
+
 def box_ciou(boxes1, boxes2, box_type='cxcywh'):
     if box_type == 'cxcywh':
         center_x1, center_y1, w1, h1 = boxes1[0], boxes1[1]
