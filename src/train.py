@@ -40,6 +40,26 @@ hyp = {
 }
 
 def get_dataloader(args, local_rank):
+    test_loader = None
+    train_loader = None
+    if args.test_only and local_rank == 0:
+        # test dataloader
+        test_dataset = COCODatasetYolo(
+                coco_dir=args.coco_dir, 
+                set_name=args.test_set, 
+                img_size=args.img_size, 
+                phase='Test'
+                )
+            
+        test_loader = DataLoader(
+                dataset = test_dataset, 
+                batch_size = 1,
+                num_workers = args.num_workers,
+                shuffle = False,
+                pin_memory = False,
+                collate_fn = test_dataset.collate_fn
+                )
+    
     if not args.test_only:
         # train dataloader
         train_dataset = COCODatasetYolo(
@@ -64,29 +84,13 @@ def get_dataloader(args, local_rank):
                 collate_fn = train_dataset.collate_fn
                 )
 
-    # test dataloader
-    test_dataset = COCODatasetYolo(
-            coco_dir=args.coco_dir, 
-            set_name=args.test_set, 
-            img_size=args.img_size, 
-            phase='Test'
-            )
     # number of classes from dataset
-    args.num_classes = test_dataset.num_classes
-        
-    test_loader = DataLoader(
-            dataset = test_dataset, 
-            batch_size = 1,
-            num_workers = args.num_workers,
-            shuffle = False,
-            pin_memory = False,
-            collate_fn = test_dataset.collate_fn
-            )
-    
-    if args.test_only:
-        return test_loader
+    if train_loader:
+        args.num_classes = train_dataset.num_classes
     else:
-        return train_loader, test_loader
+        args.num_classes = test_dataset.num_classes
+   
+    return train_loader, test_loader
 
 def train_yolo(gpu, args):
     local_rank = args.node_rank * args.gpus + gpu
@@ -100,10 +104,7 @@ def train_yolo(gpu, args):
     torch.manual_seed(0)
 
     # get dataloader
-    if args.test_only:
-        test_loader = get_dataloader(args, local_rank)
-    else:
-        train_loader, test_loader = get_dataloader(args, local_rank)
+    train_loader, test_loader = get_dataloader(args, local_rank)
 
     # model initilization
     model = YOLOv3_SPP(num_classes = args.num_classes)
@@ -156,7 +157,7 @@ def train_yolo(gpu, args):
         else:
             model.load_state_dict(checkpoint['model'])
 
-        #start_epoch = checkpoint['epoch']
+        start_epoch = checkpoint['epoch']
 
     if not args.test_only:
         ## scheduler, lambda
@@ -348,6 +349,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--coco_dir', type=str, default='../data/coco')
     parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--pretrained', type=str, default=None)
     parser.add_argument('--train_set', type=str, default='train2017')
     parser.add_argument('--test_set', type=str, default='val2017')
     parser.add_argument('--log_path', type=str, default='../log')
