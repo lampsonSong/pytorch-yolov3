@@ -11,6 +11,7 @@ import torch.nn as nn
 from net.yolo_layer import YOLOLayer
 import math
 import numpy as np
+from pathlib import Path
 
 anchors = torch.FloatTensor([[10.,13], [16,30], [33,23], [30,61], [62,45], [59,119], [116,90], [156,198], [373,326]])
 
@@ -26,6 +27,55 @@ def Conv(input_channels, output_channels, kernel_size =3, stride=1, groups=1, bi
 
     return seq
 
+def load_darknet_weights(self):
+    # Parses and loads the weights stored in 'weights'
+
+    # Establish cutoffs (load layers between 0 and cutoff. if cutoff = -1 all are loaded)
+    file = Path(self.pretrained).name
+    if file == 'darknet53.conv.74':
+        cutoff = 75
+    elif file == 'yolov3-tiny.conv.15':
+        cutoff = 15
+
+    # Read weights file
+    with open(self.pretrained, 'rb') as f:
+        # Read Header https://github.com/AlexeyAB/darknet/issues/2914#issuecomment-496675346
+        self.version = np.fromfile(f, dtype=np.int32, count=3)  # (int32) version info: major, minor, revision
+        self.seen = np.fromfile(f, dtype=np.int64, count=1)  # (int64) number of images seen during training
+
+        weights = np.fromfile(f, dtype=np.float32)  # the rest are weights
+
+    ptr = 0
+    for i, module in enumerate(self.module_list[:cutoff]):
+        if isinstance(module, nn.Sequential):
+            conv = module[0]
+            if isinstance(module[1], nn.BatchNorm2d):
+                # Load BN bias, weights, running mean and running variance
+                bn = module[1]
+                nb = bn.bias.numel()  # number of biases
+                # Bias
+                bn.bias.data.copy_(torch.from_numpy(weights[ptr:ptr + nb]).view_as(bn.bias))
+                ptr += nb
+                # Weight
+                bn.weight.data.copy_(torch.from_numpy(weights[ptr:ptr + nb]).view_as(bn.weight))
+                ptr += nb
+                # Running Mean
+                bn.running_mean.data.copy_(torch.from_numpy(weights[ptr:ptr + nb]).view_as(bn.running_mean))
+                ptr += nb
+                # Running Var
+                bn.running_var.data.copy_(torch.from_numpy(weights[ptr:ptr + nb]).view_as(bn.running_var))
+                ptr += nb
+            else:
+                # Load conv. bias
+                nb = conv.bias.numel()
+                conv_b = torch.from_numpy(weights[ptr:ptr + nb]).view_as(conv.bias)
+                conv.bias.data.copy_(conv_b)
+                ptr += nb
+            # Load conv. weights
+            nw = conv.weight.numel()  # number of weights
+            conv.weight.data.copy_(torch.from_numpy(weights[ptr:ptr + nw]).view_as(conv.weight))
+            ptr += nw
+
 class RouteConcat(nn.Module):
     def __init__(self, layers_idxes):
         super(RouteConcat, self).__init__()
@@ -39,9 +89,10 @@ class RouteConcat(nn.Module):
 
 
 class YOLOv3_SPP(nn.Module):
-    def __init__(self, num_classes):
+    def __init__(self, num_classes, pretrained):
         super(YOLOv3_SPP, self).__init__()
         self.num_classes = num_classes
+        self.pretrained = pretrained
         self.iou_ratio = 1.
 
         # first half of yolov3-spp : darknet
@@ -163,6 +214,9 @@ class YOLOv3_SPP(nn.Module):
             )
 
         self._initialize_weights()
+        if self.pretrained:
+            load_darknet_weights(self)
+        
 
     def _initialize_weights(self):
         for idx, m in enumerate(self.module_list):

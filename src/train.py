@@ -42,7 +42,7 @@ hyp = {
 def get_dataloader(args, local_rank):
     test_loader = None
     train_loader = None
-    if args.test_only and local_rank == 0:
+    if local_rank == 0:
         # test dataloader
         test_dataset = COCODatasetYolo(
                 coco_dir=args.coco_dir, 
@@ -107,7 +107,7 @@ def train_yolo(gpu, args):
     train_loader, test_loader = get_dataloader(args, local_rank)
 
     # model initilization
-    model = YOLOv3_SPP(num_classes = args.num_classes)
+    model = YOLOv3_SPP(num_classes = args.num_classes, pretrained = args.pretrained)
     torch.cuda.set_device(gpu)
     model.cuda(gpu)
 
@@ -265,8 +265,7 @@ def train_yolo(gpu, args):
         2. save the better model
         '''
         # test coco
-        test_device = next(model.parameters()).device
-        if str(test_device) == "cuda:0":
+        if local_rank == 0:
             model.eval()
             test_input_shape = (416, 416)
             results = []
@@ -280,7 +279,7 @@ def train_yolo(gpu, args):
 
                 c_img = imgs[0].permute(1,2,0).numpy().copy()
                 
-                imgs = imgs.to(test_device).float() / 255.
+                imgs = imgs.to("cuda:{}".format(local_rank)).float() / 255.
 
                 # run model
                 with torch.no_grad():
