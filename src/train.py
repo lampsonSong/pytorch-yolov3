@@ -156,7 +156,8 @@ def train_yolo(gpu, args):
         else:
             model.load_state_dict(checkpoint['model'])
 
-        #start_epoch = checkpoint['epoch']
+        start_epoch = checkpoint['epoch']
+        optimizer.load_state_dict(checkpoint['optimizer'])
 
     if not args.test_only:
         ## scheduler, lambda
