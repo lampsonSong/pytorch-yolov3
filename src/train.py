@@ -29,6 +29,7 @@ from coco_eval import convert_out_format, save_json, get_coco_eval, coco80_to_co
 
 hyp = {
     'weight_decay' : 0.00484,
+    'momentum' : 0.99,
     'reg_loss_gain' : 3.54,
     'obj_loss_gain' : 64.3,
     'cls_loss_gain' : 37.4,
@@ -122,7 +123,7 @@ def train_yolo(gpu, args):
             param_g0 += [v]
 
     # optimizer use sgd
-    optimizer = optim.SGD(param_g0, lr=args.lr, momentum=args.momentum)
+    optimizer = optim.SGD(param_g0, lr=args.lr, momentum=hyp['momentum'])
     ## optimizer use adam
     #optimizer = optim.Adam(param_g0, lr=args.lr)
 
@@ -148,7 +149,7 @@ def train_yolo(gpu, args):
                 find_unused_parameters=True)
 
     start_epoch = 0
-
+    
     # resume
     if args.resume and os.path.exists(args.resume):
         checkpoint = torch.load(args.resume, map_location="cuda:{}".format(local_rank))
@@ -157,7 +158,8 @@ def train_yolo(gpu, args):
         else:
             model.load_state_dict(checkpoint['model'])
 
-        start_epoch = checkpoint['epoch']
+        start_epoch = checkpoint['epoch'] + 1
+        optimizer.load_state_dict(checkpoint['optimizer'])
 
     if not args.test_only:
         ## scheduler, lambda
@@ -166,11 +168,10 @@ def train_yolo(gpu, args):
         total_steps = len(train_loader) * args.epoches
         if args.warmup_steps == 0:
             args.warmup_steps = total_steps * 0.01
+
         lr_func = lambda x : (x / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
 
-        scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
-        scheduler.last_epoch = start_epoch
-
+        scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func, last_epoch=start_epoch-1)
 
     results = (0,0,0,0,0,0,0)
     model.hyp = hyp
@@ -252,6 +253,7 @@ def train_yolo(gpu, args):
                 writer.add_scalar("IOU Loss : ", mean_loss[0], ni)
                 writer.add_scalar("Obj Loss : ", mean_loss[1], ni)
                 writer.add_scalar("Cls Loss : ", mean_loss[2], ni)
+                writer.add_scalar("best mAP@0.5:0.95 : ", best_mAP, ni)
                 mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
                 s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]))
                 #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
@@ -319,7 +321,6 @@ def train_yolo(gpu, args):
             val_file = os.path.join(args.coco_dir,'annotations/instances_val2017.json')
 
             test_status = get_coco_eval(val_file, pred_file, processed_ids)
-            writer.add_scalar("mAP@0.5:0.95 : ", test_status[0], epoch)
 
             if args.test_only:
                 break
@@ -362,7 +363,6 @@ if __name__ == "__main__":
     parser.add_argument('--gpus', type=int, default='2', help='number of gpus per node')
     parser.add_argument('--epoches', type=int, default='300', help='number of epoches to run')
     parser.add_argument('--lr', type=float, default='1e-2')
-    parser.add_argument('--momentum', type=float, default='0.99')
     parser.add_argument('--multi_scale_training', type=bool, default=True)
     parser.add_argument('--mixed_precision', type=bool, default=True)
     parser.add_argument('--test_only', type=bool, default=False)
@@ -372,7 +372,7 @@ if __name__ == "__main__":
     args.world_size = args.gpus * args.nodes
     if args.world_size > 1:
         os.environ['MASTER_ADDR'] = '127.0.0.1'
-        os.environ['MASTER_PORT'] = '9997'
+        os.environ['MASTER_PORT'] = '9999'
         mp.spawn(train_yolo, nprocs=args.gpus, args=(args,))
     else:
         train_yolo(0, args)
