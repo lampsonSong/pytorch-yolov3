@@ -132,9 +132,6 @@ def train_yolo(gpu, args):
     optimizer.param_groups[2]['lr'] *= 2.0 # bias learning rate
     del param_g0, param_g1, param_g2
 
-    if args.mixed_precision:
-        model, optimizer = apex.amp.initialize(model, optimizer, opt_level='O1', verbosity=0)
-    
     if args.world_size > 1:
         dist.init_process_group(
                 backend = 'nccl', # distributed backend
@@ -159,8 +156,12 @@ def train_yolo(gpu, args):
             model.load_state_dict(checkpoint['model'])
 
         start_epoch = checkpoint['epoch'] + 1
-        optimizer.load_state_dict(checkpoint['optimizer'])
+        if checkpoint['optimizer'] is not None:
+            optimizer.load_state_dict(checkpoint['optimizer'])
 
+    if args.mixed_precision:
+        model, optimizer = apex.amp.initialize(model, optimizer, opt_level='O1', verbosity=0)
+ 
     if not args.test_only:
         ## scheduler, lambda
         #lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
@@ -171,7 +172,9 @@ def train_yolo(gpu, args):
 
         lr_func = lambda x : (x / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
 
-        scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func, last_epoch=start_epoch-1)
+        #scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func, last_epoch=start_epoch)
+        scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
+        scheduler.last_epoch = start_epoch
 
     results = (0,0,0,0,0,0,0)
     model.hyp = hyp
