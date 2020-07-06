@@ -367,7 +367,7 @@ if __name__ == "__main__":
     parser.add_argument('--epoches', type=int, default='300', help='number of epoches to run')
     parser.add_argument('--lr', type=float, default='1e-2')
     parser.add_argument('--multi_scale_training', type=bool, default=True)
-    parser.add_argument('--mixed_precision', type=bool, default=True)
+    parser.add_argument('--mixed_precision', type=bool, default=False)
     parser.add_argument('--test_only', type=bool, default=False)
     parser.add_argument('--accumulate', type=int, default=4, help='accumulate 4 times then optimizing')
     args = parser.parse_args()
