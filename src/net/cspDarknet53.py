@@ -3,6 +3,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class weightedFeatureFusion(nn.Module):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
     def __init__(self, layers_idxes, weight=False):
@@ -34,6 +35,30 @@ class weightedFeatureFusion(nn.Module):  # weighted sum of 2 or more layers http
             else:  # same shape
                 x = x + a
         return x
+
+class Mish(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        x = x * (torch.tanh(F.softplus(x)))
+        return x
+
+def ConvBnMish(input_channels, output_channels, kernel_size =3, stride=1, groups=1):
+    padding = (kernel_size - 1) // 2
+
+    seq = nn.Sequential()
+    seq.add_module('Conv2d',
+        nn.Conv2d(input_channels, output_channels, kernel_size, stride, padding, groups=groups, bias=False)
+        )
+    seq.add_module('BatchNorm2d',
+        nn.BatchNorm2d(output_channels, momentum=0.1)
+        )
+    seq.add_module('activation',
+        Mish()
+        )
+
+    return seq
 
 
 
