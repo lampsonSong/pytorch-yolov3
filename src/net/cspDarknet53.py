@@ -5,6 +5,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class RouteConcat(nn.Module):
+    def __init__(self, layers_idxes):
+        super(RouteConcat, self).__init__()
+        self.layers_idxes = layers_idxes
+        self.n = len(layers_idxes) # number of layers
+
+    def forward(self, outputs):
+        out = torch.cat([outputs[i] for i in self.layers_idxes], 1)
+
+        return out
+
 class weightedFeatureFusion(nn.Module):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
     def __init__(self, layers_idxes, weight=False):
         super(weightedFeatureFusion, self).__init__()
@@ -61,41 +72,31 @@ def ConvBnMish(input_channels, output_channels, kernel_size =3, stride=1, groups
     return seq
 
 
-
-def ConvBnLeakyRelu(input_channels, output_channels, kernel_size =3, stride=1, groups=1):
-    padding = (kernel_size - 1) // 2
-
-    seq = nn.Sequential()
-    seq.add_module('Conv2d',
-        nn.Conv2d(input_channels, output_channels, kernel_size, stride, padding, groups=groups, bias=False)
-        )
-    seq.add_module('BatchNorm2d',
-        nn.BatchNorm2d(output_channels, momentum=0.1)
-        )
-    seq.add_module('activation',
-        nn.LeakyReLU(0.1, inplace=True)
-        )
-
-    return seq
-
 # input_channels = output_channels, down channels then conv
-def DarkConvRes(num_blocks, input_channels, m_list, kernel_sizes=[1,3]):
+def CSPDarkConvRes(num_blocks, input_channels, m_list, kernel_sizes=[1,3]):
     assert(len(kernel_sizes) == 2)
 
     for i in range(0,num_blocks):
         m_list.append(
-            ConvBnLeakyRelu(input_channels = input_channels, output_channels = input_channels//2, kernel_size = kernel_sizes[0], stride = 1, groups = 1)
+            ConvBnMish(input_channels = input_channels, output_channels = input_channels, kernel_size = kernel_sizes[0], stride = 1, groups = 1)
             )
         m_list.append(
-            ConvBnLeakyRelu(input_channels = input_channels//2, output_channels = input_channels, kernel_size = kernel_sizes[1], stride = 1, groups = 1)
+            ConvBnMish(input_channels = input_channels, output_channels = input_channels // 2, kernel_size = kernel_sizes[0], stride = 1, groups = 1)
+            )
+        m_list.append(
+            ConvBnMish(input_channels = input_channels//2, output_channels = input_channels, kernel_size = kernel_sizes[1], stride = 1, groups = 1)
             )
         
         m_list.append(weightedFeatureFusion([-3], False))
 
-class DarkNet53(nn.Module):
+    m_list.append(
+            ConvBnMish(input_channels = input_channels, output_channels = input_channels, kernel_size = kernel_sizes[0], stride = 1, groups = 1)
+            )
+
+class CSPDarkNet53(nn.Module):
     # BTW, darknet-53 contains only 52 convolution layers
     def __init__(self):
-        super(DarkNet53, self).__init__()
+        super(CSPDarkNet53, self).__init__()
         self.module_list = nn.ModuleList()
         
         # set parameters
@@ -107,13 +108,14 @@ class DarkNet53(nn.Module):
                     [512, 1024]
                 ]
         residual_num_blocks=[1,2,8,8,4]
+        route_idxes = [2, 12, 25, 56, 87]
         assert(len(in_out_channels) == len(residual_num_blocks))
 
         # shortcut layers
         #shortcut_idx = [4, 8, 11, 15, 18, 21, 24, 27, 30, 33, 35]
 
         # first conv
-        conv1 = ConvBnLeakyRelu(input_channels = 3,output_channels = 32, kernel_size = 3, stride = 1)
+        conv1 = ConvBnMish(input_channels = 3,output_channels = 32, kernel_size = 3, stride = 1)
         self.module_list.append(conv1)
         
         # downsample and residuals
@@ -123,11 +125,26 @@ class DarkNet53(nn.Module):
 
             ## downsample
             self.module_list.append(
-                ConvBnLeakyRelu(input_channels = c_sizes[0], output_channels = c_sizes[1], kernel_size = 3, stride = 2)
+                ConvBnMish(input_channels = c_sizes[0], output_channels = c_sizes[1], kernel_size = 3, stride = 2)
                 )
+            # transition layer
+            self.module_list.append(
+                ConvBnMish(input_channels = c_sizes[1], output_channels = c_sizes[1], kernel_size = 1, stride = 1)
+                )
+            self.module_list.append(
+                RouteConcat([-2])
+                )
+
             ## residual
-            DarkConvRes(num_blocks=residual_num_blocks[idx], input_channels=c_sizes[1], m_list=self.module_list)
-       
+            self.module_list.append(
+                CSPDarkConvRes(num_blocks=residual_num_blocks[idx], input_channels=c_sizes[1], m_list=self.module_list)
+                )
+
+            # weightedFeatureFusion (Route)
+            self.module_list.append(
+                    weightedFeatureFusion([route_idxes[idx]], False)
+                    )
+
         ## for classification
         #num_classes = 1000
         #self.avg_pool = nn.AdaptiveAvgPool2d(1)
@@ -140,6 +157,9 @@ class DarkNet53(nn.Module):
             if(isinstance(module, weightedFeatureFusion)):
                 x = module(x, outputs)
                 outputs.append(x)
+            elif isinstance(module, RouteConcat):
+                x = module(outputs)
+                outputs.append(x)
             else:
                 x = module(x)
                 outputs.append(x)
@@ -147,7 +167,7 @@ class DarkNet53(nn.Module):
         return x
 
 if __name__ == "__main__":
-    body = DarkNet53()
+    body = CSPDarkNet53()
     print(body)
     input_data = torch.randn(1,3,256,256)
 
