@@ -73,32 +73,31 @@ def ConvBnMish(input_channels, output_channels, kernel_size =3, stride=1, groups
 
 
 # input_channels = output_channels, down channels then conv
-def CSPDarkConvRes(num_blocks, input_channels, m_list, kernel_sizes=[1,3]):
+def CSPDarkConvRes(num_blocks, t_sizes, m_list, kernel_sizes=[1,3]):
     assert(len(kernel_sizes) == 2)
 
+    m_list.append(
+        ConvBnMish(input_channels = t_sizes[0], output_channels = t_sizes[1], kernel_size = kernel_sizes[0], stride = 1, groups = 1)
+        )
     for i in range(0,num_blocks):
         m_list.append(
-            ConvBnMish(input_channels = input_channels, output_channels = input_channels, kernel_size = kernel_sizes[0], stride = 1, groups = 1)
+            ConvBnMish(input_channels = t_sizes[1], output_channels = t_sizes[1], kernel_size = kernel_sizes[0], stride = 1, groups = 1)
             )
         m_list.append(
-            ConvBnMish(input_channels = input_channels, output_channels = input_channels // 2, kernel_size = kernel_sizes[0], stride = 1, groups = 1)
-            )
-        m_list.append(
-            ConvBnMish(input_channels = input_channels//2, output_channels = input_channels, kernel_size = kernel_sizes[1], stride = 1, groups = 1)
+            ConvBnMish(input_channels = t_sizes[1], output_channels = t_sizes[1], kernel_size = kernel_sizes[1], stride = 1, groups = 1)
             )
         
         m_list.append(weightedFeatureFusion([-3], False))
 
     m_list.append(
-            ConvBnMish(input_channels = input_channels, output_channels = input_channels, kernel_size = kernel_sizes[0], stride = 1, groups = 1)
+            ConvBnMish(input_channels = t_sizes[1], output_channels = t_sizes[1], kernel_size = kernel_sizes[0], stride = 1, groups = 1)
             )
 
 class CSPDarkNet53(nn.Module):
-    # BTW, darknet-53 contains only 52 convolution layers
     def __init__(self):
         super(CSPDarkNet53, self).__init__()
         self.module_list = nn.ModuleList()
-        
+
         # set parameters
         in_out_channels=[
                     [32, 64],
@@ -107,13 +106,36 @@ class CSPDarkNet53(nn.Module):
                     [256, 512],
                     [512, 1024]
                 ]
-        residual_num_blocks=[1,2,8,8,4]
-        route_idxes = [2, 12, 25, 56, 87]
-        assert(len(in_out_channels) == len(residual_num_blocks))
+        residual_num_blocks=[
+                1,
+                2,
+                8,
+                8,
+                4
+            ]
+        route_idxes = [
+                2, 
+                12, 
+                25, 
+                56, 
+                87
+            ]
 
-        # shortcut layers
-        #shortcut_idx = [4, 8, 11, 15, 18, 21, 24, 27, 30, 33, 35]
+        transition_in_out_channels=[
+                    [64, 64],
+                    [128, 64],
+                    [256, 128],
+                    [512, 256],
+                    [1024, 512]
+                ]
 
+        concat_in_out_channels=[
+                    [128, 64],
+                    [128, 128],
+                    [256, 256],
+                    [512, 512],
+                    [1024, 1024]
+                ]
         # first conv
         conv1 = ConvBnMish(input_channels = 3,output_channels = 32, kernel_size = 3, stride = 1)
         self.module_list.append(conv1)
@@ -121,7 +143,8 @@ class CSPDarkNet53(nn.Module):
         # downsample and residuals
         for idx in range(0, len(in_out_channels)):
             c_sizes = in_out_channels[idx]
-            assert(len(c_sizes) == 2)
+            t_sizes = transition_in_out_channels[idx]
+            concat_sizes = concat_in_out_channels[idx]
 
             ## downsample
             self.module_list.append(
@@ -129,20 +152,21 @@ class CSPDarkNet53(nn.Module):
                 )
             # transition layer
             self.module_list.append(
-                ConvBnMish(input_channels = c_sizes[1], output_channels = c_sizes[1], kernel_size = 1, stride = 1)
+                ConvBnMish(input_channels = t_sizes[0], output_channels = t_sizes[1], kernel_size = 1, stride = 1)
                 )
             self.module_list.append(
                 RouteConcat([-2])
                 )
 
             ## residual
-            self.module_list.append(
-                CSPDarkConvRes(num_blocks=residual_num_blocks[idx], input_channels=c_sizes[1], m_list=self.module_list)
-                )
+            CSPDarkConvRes(num_blocks=residual_num_blocks[idx], t_sizes=t_sizes, m_list=self.module_list)
 
-            # weightedFeatureFusion (Route)
+            # RouteConcat (Route)
             self.module_list.append(
-                    weightedFeatureFusion([route_idxes[idx]], False)
+                RouteConcat([-1, route_idxes[idx]])
+                    )
+            self.module_list.append(
+                ConvBnMish(input_channels = concat_sizes[0], output_channels = concat_sizes[1], kernel_size = 1, stride = 1)
                     )
 
         ## for classification
@@ -174,6 +198,8 @@ if __name__ == "__main__":
     out = body(input_data)
 
     print(out.shape)
+
+    #torch.onnx.export(body, input_data, "CSPDarknet.onnx", verbose=True, keep_initializers_as_inputs=True)
 
     #m = torch.load("/home/lampson/workspace-ln/objectDetection/YOLO/ultralytics-yolov3/weights/yolov3_model/416/yolov3-spp-ultralytics.pt")
     #print("---------------")
