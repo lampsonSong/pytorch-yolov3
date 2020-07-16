@@ -4,6 +4,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 class RouteConcat(nn.Module):
     def __init__(self, layers_idxes):
@@ -52,7 +53,7 @@ class Mish(nn.Module):
         super().__init__()
 
     def forward(self, x):
-        x = x * (torch.tanh(F.softplus(x)))
+        x = x * (torch.tanh(torch.log(1+math.e**x)))
         return x
 
 def ConvBnMish(input_channels, output_channels, kernel_size =3, stride=1, groups=1):
@@ -199,7 +200,7 @@ if __name__ == "__main__":
 
     print(out.shape)
 
-    #torch.onnx.export(body, input_data, "CSPDarknet.onnx", verbose=True, keep_initializers_as_inputs=True)
+    torch.onnx.export(body, input_data, "CSPDarknet.onnx", verbose=True, keep_initializers_as_inputs=True)
 
     #m = torch.load("/home/lampson/workspace-ln/objectDetection/YOLO/ultralytics-yolov3/weights/yolov3_model/416/yolov3-spp-ultralytics.pt")
     #print("---------------")
