@@ -6,6 +6,9 @@ sys.path.append('.')
 import torch
 import torch.nn as nn
 import collections
+from net.yolo_layer import YOLOLayer
+
+anchors = torch.FloatTensor([[10.,13], [16,30], [33,23], [30,61], [62,45], [59,119], [116,90], [156,198], [373,326]])
 
 class Conv(nn.Module):
     def __init__(self, input_channels, output_channels, kernel_size = 3, stride = 1, groups = 1, act=True):
@@ -80,10 +83,11 @@ class Concat(nn.Module):
         return torch.cat([outputs[i] for i in self.layers_idxes], dim=1)
 
 # YOLOV5s
-class Model(nn.Module):
-    def __init__(self):
-        super(Model, self).__init__()
+class YOLOv5s(nn.Module):
+    def __init__(self, num_classes, pretrained=None):
+        super(YOLOv5s, self).__init__()
 
+        self.module_list = nn.ModuleList()
         self.layers = [ 
                 Focus(c1=3, c2=32, k=3), # 0
                 Conv(32, 64), # 1
@@ -103,32 +107,51 @@ class Model(nn.Module):
                 nn.Upsample(scale_factor=2.0), # 15
                 Concat(layers_idxes=[-1, 4]), # 16
                 BottleneckCSP(256, 128, expansion=0.25), # 17
-                Conv(128, 128, stride=2), # 18
-                Concat(layers_idxes=[-1, 14]), # 19
-                BottleneckCSP(256, 256, expansion=0.5), # 20
-                Conv(256, 256, stride=2), # 21
-                Concat(layers_idxes=[-1, 10]), # 22
-                BottleneckCSP(512, 512, expansion=0.5), # 23
-                # 24 , yolo out
+                nn.Conv2d(128, 255, kernel_size = 1, stride = 1), # 18
+                YOLOLayer(anchors=anchors[0:3], num_classes=num_classes), # yolo out 1
+                Concat(layers_idxes=[17]), # 19
+                Conv(128, 128, stride=2), # 20
+                Concat(layers_idxes=[-1, 14]), # 21
+                BottleneckCSP(256, 256, expansion=0.5), # 22
+                nn.Conv2d(256, 255, kernel_size = 1, stride = 1), # 23
+                YOLOLayer(anchors=anchors[3:6], num_classes=num_classes), # yolo out 2
+                Concat(layers_idxes=[22]), # 24
+                Conv(256, 256, stride=2), # 25
+                Concat(layers_idxes=[-1, 10]), # 26
+                BottleneckCSP(512, 512, expansion=0.5), # 27
+                nn.Conv2d(512, 255, kernel_size = 1, stride = 1), # 28
+                YOLOLayer(anchors=anchors[6:9], num_classes=num_classes), # yolo out 3
                 ]
 
-        self.model = nn.Sequential(*self.layers)
+        for l in self.layers:
+            self.module_list.append(l)
+
+        #self.model = nn.Sequential(*self.layers)
 
 
     def forward(self, x):
         outputs = []
-        for m in self.model:
+        yolo_out = []
+        img_max_side = max(x.shape[-2:])
+        
+        for m in self.module_list:
             if isinstance(m, Concat):
                 x = m(outputs)
+                outputs.append(x)
+            elif isinstance(m, YOLOLayer):
+                out = m(x, img_max_side)
+                yolo_out.append(out)
             else:
                 x = m(x)
+                outputs.append(x)
 
-            outputs.append(x)
-
-        return x
+        if self.training:
+            return yolo_out
+        else:
+            return torch.cat(yolo_out, 1)
 
 if __name__ == "__main__":
-    model = Model()
+    model = YOLOv5s(num_classes=80)
     print(model)
 
     input_data = torch.randn(1,3,128,128)
