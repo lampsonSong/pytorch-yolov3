@@ -10,6 +10,7 @@ import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 
 from net.yolov3_spp import YOLOv3_SPP
+from net.yolov5s import YOLOv5s
 from net.yolov3_loss import get_yolo_loss
 
 import torch.distributed as dist
@@ -17,10 +18,10 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from torch.utils.tensorboard import SummaryWriter
-
 import torch.multiprocessing as mp
 import apex
 
+import time
 from tqdm import tqdm
 import math
 from utils.utils import non_max_suppression, scale_coords, clip_coords
@@ -28,17 +29,22 @@ from utils.utils import non_max_suppression, scale_coords, clip_coords
 from coco_eval import convert_out_format, save_json, get_coco_eval, coco80_to_coco91_class
 
 hyp = {
-    'weight_decay' : 0.00484,
-    'momentum' : 0.99,
-    'reg_loss_gain' : 3.54,
-    'obj_loss_gain' : 64.3,
-    'cls_loss_gain' : 37.4,
+    'weight_decay' : 5e-4,
+    'momentum' : 0.937,
+    'reg_loss_gain' : 1.,
+    'obj_loss_gain' : 1.,
+    'cls_loss_gain' : 1.,
     'train_iou_thresh' : 0.225,
     'fl_gamma' : 2.,
     'cls_pw' : 1.0,
     'obj_pw' : 1.0,
     'use_focal_loss' : False
 }
+
+net_dict = {
+        'YOLOv3_SPP' : YOLOv3_SPP,
+        'YOLOv5s' : YOLOv5s
+        }
 
 def get_dataloader(args, local_rank):
     test_loader = None
@@ -96,7 +102,9 @@ def get_dataloader(args, local_rank):
 def train_yolo(gpu, args):
     local_rank = args.node_rank * args.gpus + gpu
 
-    writer = SummaryWriter(args.log_path)
+    writer = None
+    if local_rank == 0:
+        writer = SummaryWriter(args.log_path)
 
     if not torch.cuda.is_available():
         print("CUDA is not available")
@@ -108,7 +116,8 @@ def train_yolo(gpu, args):
     train_loader, test_loader = get_dataloader(args, local_rank)
 
     # model initilization
-    model = YOLOv3_SPP(num_classes = args.num_classes, pretrained = args.pretrained)
+    m = net_dict[args.net]
+    model = m(num_classes = args.num_classes, pretrained = args.pretrained)
     torch.cuda.set_device(gpu)
     model.cuda(gpu)
 
@@ -186,7 +195,9 @@ def train_yolo(gpu, args):
             model.iou_ratio = 1. - (1 + math.cos(min(epoch*2, args.epoches) * math.pi / args.epoches)) / 2
 
             mean_loss = torch.zeros(4)
-            print(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size'))
+            
+            if local_rank == 0:
+                print(('\n' + '%10s' * 9) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size', 'last_mAP'))
 
             pbar = tqdm(enumerate(train_loader), total=len(train_loader))
             for idx, (imgs, targets, _, _) in pbar:
@@ -248,20 +259,26 @@ def train_yolo(gpu, args):
                 
                 # update scheduler
                 scheduler.step()
-                writer.add_scalar("lr : ", scheduler.get_last_lr()[0], ni)
-                
-                # mean loss
-                mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
-                writer.add_scalar("Mean Loss : ", mean_loss[3], ni)
-                writer.add_scalar("IOU Loss : ", mean_loss[0], ni)
-                writer.add_scalar("Obj Loss : ", mean_loss[1], ni)
-                writer.add_scalar("Cls Loss : ", mean_loss[2], ni)
-                writer.add_scalar("best mAP@0.5:0.95 : ", best_mAP, ni)
-                mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]))
-                #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
 
-                pbar.set_description(s)
+            
+                # tensorboard
+                if local_rank == 0:
+                    writer.add_scalar("lr : ", scheduler.get_last_lr()[0], ni)
+                    
+                    # mean loss
+                    mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
+                    writer.add_scalar("Mean Loss : ", mean_loss[3], ni)
+                    writer.add_scalar("IOU Loss : ", mean_loss[0], ni)
+                    writer.add_scalar("Obj Loss : ", mean_loss[1], ni)
+                    writer.add_scalar("Cls Loss : ", mean_loss[2], ni)
+                    writer.add_scalar("best mAP@0.5:0.95 : ", best_mAP, ni)
+                    mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
+                    s = ('%10s' * 2 + '%10.3g' * 7) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]), best_mAP)
+                    #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
+
+                    pbar.set_description(s)
+                
+
 
 
         '''
@@ -276,8 +293,8 @@ def train_yolo(gpu, args):
             results = []
             processed_ids = []
             coco91cls = coco80_to_coco91_class()
-            #tbar = tqdm(enumerate(test_loader), total=len(test_loader))
-            tbar = tqdm(enumerate(test_loader))
+            tbar = tqdm(enumerate(test_loader), total=len(test_loader))
+            #tbar = tqdm(enumerate(test_loader))
             for idx, (imgs, targets, img_id_tuple, orig_shape_tuple) in tbar:
                 if(len(targets) == 0):
                     continue
@@ -342,11 +359,10 @@ def train_yolo(gpu, args):
                             #'scheduler' : scheduler.state_dict()
                             }
                     
-                    torch.save(state, "../weights/yolov3_last.pth")
+                    torch.save(state, "../weights/"+args.net+"_last.pth")
                     if test_status[0] > best_mAP:
-                        torch.save(state, "../weights/yolov3_best.pth")
+                        torch.save(state, "../weights/"+args.net+"_best.pth")
                         best_mAP = test_status[0]
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -356,6 +372,7 @@ if __name__ == "__main__":
     parser.add_argument('--train_set', type=str, default='train2017')
     parser.add_argument('--test_set', type=str, default='val2017')
     parser.add_argument('--log_path', type=str, default='../log')
+    parser.add_argument('--net', type=str, default='YOLOV3_SPP')
     parser.add_argument('--regression_loss_type', type=str, default='GIoU', help="GIoU | CIoU | DIoU")
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--img_size', type=int, default=416)
