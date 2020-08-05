@@ -32,8 +32,8 @@ hyp = {
     'weight_decay' : 5e-4,
     'momentum' : 0.937,
     'reg_loss_gain' : 1.,
-    'obj_loss_gain' : 1.,
-    'cls_loss_gain' : 1.,
+    'obj_loss_gain' : 64.3,
+    'cls_loss_gain' : 37.3,
     'train_iou_thresh' : 0.225,
     'fl_gamma' : 2.,
     'cls_pw' : 1.0,
@@ -45,6 +45,8 @@ net_dict = {
         'YOLOv3_SPP' : YOLOv3_SPP,
         'YOLOv5s' : YOLOv5s
         }
+
+best_mAP = -1.
 
 def get_dataloader(args, local_rank):
     test_loader = None
@@ -141,6 +143,9 @@ def train_yolo(gpu, args):
     optimizer.param_groups[2]['lr'] *= 2.0 # bias learning rate
     del param_g0, param_g1, param_g2
 
+    if args.mixed_precision:
+        model, optimizer = apex.amp.initialize(model, optimizer, opt_level='O1', verbosity=0)
+ 
     if args.world_size > 1:
         dist.init_process_group(
                 backend = 'nccl', # distributed backend
@@ -168,18 +173,15 @@ def train_yolo(gpu, args):
         if checkpoint['optimizer'] is not None:
             optimizer.load_state_dict(checkpoint['optimizer'])
 
-    if args.mixed_precision:
-        model, optimizer = apex.amp.initialize(model, optimizer, opt_level='O1', verbosity=0)
- 
     if not args.test_only:
-        ## scheduler, lambda
-        #lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
-        # scheduler cosine
-        total_steps = len(train_loader) * args.epoches
-        if args.warmup_steps == 0:
-            args.warmup_steps = total_steps * 0.01
+        # scheduler, lambda
+        lr_func = lambda x: (1 + math.cos(x * math.pi / args.epoches)) / 2 * 0.99 + 0.01 
+        ## scheduler cosine
+        #total_steps = len(train_loader) * args.epoches
+        #if args.warmup_steps == 0:
+        #    args.warmup_steps = total_steps * 0.01
 
-        lr_func = lambda x : (x / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
+        #lr_func = lambda x : (x / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
 
         #scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func, last_epoch=start_epoch)
         scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
@@ -187,7 +189,6 @@ def train_yolo(gpu, args):
 
     results = (0,0,0,0,0,0,0)
     model.hyp = hyp
-    best_mAP = -1.
     # start training
     for epoch in range(start_epoch, args.epoches):
         if not args.test_only:
@@ -256,28 +257,28 @@ def train_yolo(gpu, args):
                     loss.backward()
             
                 optimizer.step()
-                
-                # update scheduler
-                scheduler.step()
-
             
+                # mean loss
+                mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
                 # tensorboard
                 if local_rank == 0:
                     writer.add_scalar("lr : ", scheduler.get_last_lr()[0], ni)
                     
-                    # mean loss
-                    mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
                     writer.add_scalar("Mean Loss : ", mean_loss[3], ni)
                     writer.add_scalar("IOU Loss : ", mean_loss[0], ni)
                     writer.add_scalar("Obj Loss : ", mean_loss[1], ni)
                     writer.add_scalar("Cls Loss : ", mean_loss[2], ni)
                     writer.add_scalar("best mAP@0.5:0.95 : ", best_mAP, ni)
-                    mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                    s = ('%10s' * 2 + '%10.3g' * 7) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]), best_mAP)
-                    #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
-
-                    pbar.set_description(s)
                 
+                mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
+                s = ('%10s' * 2 + '%10.3g' * 7) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]), best_mAP)
+                #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
+
+                pbar.set_description(s)
+                
+            # update scheduler
+            scheduler.step()
+
 
 
 
