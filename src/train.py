@@ -29,11 +29,12 @@ from utils.utils import non_max_suppression, scale_coords, clip_coords
 from coco_eval import convert_out_format, save_json, get_coco_eval, coco80_to_coco91_class
 
 hyp = {
-    'weight_decay' : 5e-4,
+    #'weight_decay' : 5e-4,
+    'weight_decay' : 0.00484,
     'momentum' : 0.937,
-    'reg_loss_gain' : 1.,
+    'reg_loss_gain' : 3.54,
     'obj_loss_gain' : 64.3,
-    'cls_loss_gain' : 37.3,
+    'cls_loss_gain' : 37.4,
     'train_iou_thresh' : 0.225,
     'fl_gamma' : 2.,
     'cls_pw' : 1.0,
@@ -46,7 +47,6 @@ net_dict = {
         'YOLOv5s' : YOLOv5s
         }
 
-best_mAP = -1.
 
 def get_dataloader(args, local_rank):
     test_loader = None
@@ -183,12 +183,14 @@ def train_yolo(gpu, args):
 
         #lr_func = lambda x : (x / args.warmup_steps) if x < args.warmup_steps else 0.5 * (math.cos((x - args.warmup_steps)/( total_steps - args.warmup_steps) * math.pi) + 1)
 
-        #scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func, last_epoch=start_epoch)
-        scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
-        scheduler.last_epoch = start_epoch
+        scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func, last_epoch=start_epoch-1)
+        #scheduler =  lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_func)
+        #scheduler.last_epoch = start_epoch
 
     results = (0,0,0,0,0,0,0)
     model.hyp = hyp
+    best_mAP = -1.
+    
     # start training
     for epoch in range(start_epoch, args.epoches):
         if not args.test_only:
@@ -198,7 +200,7 @@ def train_yolo(gpu, args):
             mean_loss = torch.zeros(4)
             
             if local_rank == 0:
-                print(('\n' + '%10s' * 9) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size', 'last_mAP'))
+                print(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size'))
 
             pbar = tqdm(enumerate(train_loader), total=len(train_loader))
             for idx, (imgs, targets, _, _) in pbar:
@@ -249,15 +251,17 @@ def train_yolo(gpu, args):
                 ## why nomial loss with batch size 64?
                 #loss *= args.batch_size / 64
 
-                optimizer.zero_grad()
+                #if ni % args.accumulate == 0:
+                #    optimizer.zero_grad()
                 if args.mixed_precision:
                     with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
                 else:
                     loss.backward()
-            
-                optimizer.step()
-            
+        
+                if ni % args.accumulate == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
                 # mean loss
                 mean_loss = (mean_loss * idx + loss_items.cpu()) / (idx + 1) 
                 # tensorboard
@@ -268,11 +272,9 @@ def train_yolo(gpu, args):
                     writer.add_scalar("IOU Loss : ", mean_loss[0], ni)
                     writer.add_scalar("Obj Loss : ", mean_loss[1], ni)
                     writer.add_scalar("Cls Loss : ", mean_loss[2], ni)
-                    writer.add_scalar("best mAP@0.5:0.95 : ", best_mAP, ni)
                 
                 mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.3g' * 7) % ('%g/%g' % (epoch, args.epoches - 1), mem, *mean_loss, len(targets), max(imgs[0].shape[2:]), best_mAP)
-                #s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
+                s = ('%10s' * 2 + '%10.3g' * 6) % ('%g/%g' % (epoch, args.epoches - 1), mem, *loss_items.cpu(), len(targets), max(imgs[0].shape[2:]))
 
                 pbar.set_description(s)
                 
@@ -365,6 +367,8 @@ def train_yolo(gpu, args):
                         torch.save(state, "../weights/"+args.net+"_best.pth")
                         best_mAP = test_status[0]
 
+                    writer.add_scalar("best mAP@0.5:0.95 : ", best_mAP, epoch)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--coco_dir', type=str, default='../data/coco')
@@ -373,7 +377,7 @@ if __name__ == "__main__":
     parser.add_argument('--train_set', type=str, default='train2017')
     parser.add_argument('--test_set', type=str, default='val2017')
     parser.add_argument('--log_path', type=str, default='../log')
-    parser.add_argument('--net', type=str, default='YOLOV3_SPP')
+    parser.add_argument('--net', type=str, default='YOLOv3_SPP')
     parser.add_argument('--regression_loss_type', type=str, default='GIoU', help="GIoU | CIoU | DIoU")
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--img_size', type=int, default=416)
