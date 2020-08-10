@@ -24,6 +24,7 @@ from dataset.coco_dataset import COCODataset
 from utils.utils import x1y1x2y2_2_cxcywh
 from utils.utils import cxcywh_2_x1y1x2y2
 from utils.utils import scale_coords
+from tqdm import tqdm
 
 # from https://github.com/ultralytics/yolov3 utils/dataset.py
 def letterbox(img, new_shape=(416, 416), color=(128, 128, 128),
@@ -67,13 +68,16 @@ def letterbox(img, new_shape=(416, 416), color=(128, 128, 128),
     return img, ratio, (left, right, top, bottom)
 
 
-class COCODatasetYolo(COCODataset):
+class COCODatasetYolo(Dataset):
     def __init__(self, coco_dir, set_name='val2014', img_size=416, multiscale=False, phase='Test'):
-        super().__init__(coco_dir, set_name, img_size)
+        #super().__init__(coco_dir, set_name, img_size)
+        super(Dataset, self).__init__()
 
+        self.coco_dir = coco_dir
+        self.set_name = set_name
         self.max_objects = 100
-        self.min_size = self.img_size - 3 * 32
-        self.max_size = self.img_size + 3 * 32
+        self.min_size = img_size - 3 * 32
+        self.max_size = img_size + 3 * 32
 
         self.multiscale = multiscale
         self.batch_count = 0
@@ -94,6 +98,25 @@ class COCODatasetYolo(COCODataset):
                 ])
 
         self.mosaic = self.augmentation
+        self.cached_labels = []
+        
+        self.cached_label_path = os.path.join(self.coco_dir, set_name+'_label.cache')
+        if not os.path.exists(self.cached_label_path):
+            self.cache_labels()
+
+
+    def cache_labels(self):
+        coco_data = COCODataset(coco_dir=self.coco_dir, set_name=self.set_name)
+        image_ids = coco_data.image_ids
+        self.num_classes = len(coco_data.classes)
+
+        for index in range(0, len(image_ids)):
+            img_info = coco_data.coco.loadImgs(image_ids[index])[0]
+            targets = coco_data.load_box_annotation(index)
+            self.cached_labels.append([{'image_name': img_info['file_name'], 'targets':targets}])
+
+    def __len__(self):
+        return len(self.cached_labels)
 
     def __getitem__(self, index):
         if self.mosaic:
@@ -139,8 +162,12 @@ class COCODatasetYolo(COCODataset):
         return lettered_img, targets, (h0, w0), img_id
 
     def load_image(self, index, b_resize=True):
-        img_info = self.coco.loadImgs(self.image_ids[index])[0]
-        img_path = os.path.join(self.coco_dir, 'images', self.set_name, img_info['file_name'])
+        if not os.path.exists(self.cached_label_path):
+            img_info = self.coco.loadImgs(self.image_ids[index])[0]
+            img_path = os.path.join(self.coco_dir, 'images', self.set_name, img_info['file_name'])
+        else:
+            img_path = os.path.join(self.coco_dir, 'images', self.set_name, self.cached_labels[index]['image_name'])
+
        
         img = cv2.imread(img_path)
         h0, w0 = img.shape[:2] # origin shape
@@ -157,7 +184,10 @@ class COCODatasetYolo(COCODataset):
 
 
     def load_box_annotation_yolo(self, index, ratio, pad):
-        boxes = self.load_box_annotation(index)
+        if not os.path.exists(self.cached_label_path):
+            boxes = self.load_box_annotation(index)
+        else:
+            boxes = self.cached_labels[index]['targets']
         
         # Extract coordinates for unpadded + unscaled image
         x1 = boxes[:,2]
