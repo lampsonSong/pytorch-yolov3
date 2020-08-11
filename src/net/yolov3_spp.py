@@ -212,6 +212,8 @@ class YOLOv3_SPP(nn.Module):
                 YOLOLayer(anchors=anchors[0:3],
                     num_classes=self.num_classes)
             )
+        self.connection_layer_idx = []
+        self.get_connection_layer_idx()
 
         self._initialize_weights()
         if self.pretrained:
@@ -256,7 +258,14 @@ class YOLOv3_SPP(nn.Module):
                 #print('----------------')
                 #print(self.module_list[idx-1][0].bias)
 
-
+    # get connection layers 
+    def get_connection_layer_idx(self):
+        for idx, module in enumerate(self.module_list):
+            if isinstance(module, weightedFeatureFusion) or isinstance(module, RouteConcat):
+                for l_i in module.layers_idxes:
+                    mark_idx = l_i if l_i  > 0 else idx + l_i
+                    if mark_idx not in self.connection_layer_idx:
+                        self.connection_layer_idx.append(mark_idx)
 
     def forward(self, x):
         outputs = []
@@ -266,18 +275,18 @@ class YOLOv3_SPP(nn.Module):
         for idx, module in enumerate(self.module_list):
             if isinstance(module, weightedFeatureFusion):
                 x = module(x, outputs)
-                outputs.append(x)
+                outputs.append(x if idx in self.connection_layer_idx else [])
             elif isinstance(module, RouteConcat):
                 x = module(outputs)
-                outputs.append(x)
+                outputs.append(x if idx in self.connection_layer_idx else [])
             elif isinstance(module, YOLOLayer):
                 out = module(x,img_max_side)
                 yolo_out.append(out)
-                outputs.append(out)
+                outputs.append([])
             else:
                 x = module(x)
-                outputs.append(x)
-
+                outputs.append(x if idx in self.connection_layer_idx else [])
+        
         if self.training:
             return yolo_out
         else:
